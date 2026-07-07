@@ -20,6 +20,7 @@ No notebook interface or local data paths are required. All uploaded and generat
 - **Geographic analysis** automatically analyzes the current MNCS-enriched corpus and reproduces notebook Sections 17–18 and 20–21: country distribution, SCP/MCP collaboration, country MNCS, citation prestige, the productivity-impact matrix, the international collaboration network, and clickable country case studies.
 - **Advanced analyses** runs after the geographic phase and produces the final paper-ready dataset summary, article and author impact rankings, Bradford scattering, hot papers, team-size impact, and the journal landscape.
 - **Thematic analysis** uses the current geographic dataset or prepares one uploaded Chronotome dataset in the background. It provides staged NLTK setup, optional query-term removal, visible editable noise-list categories, 1–4 gram extraction and word clouds, automatic LDA/NMF topic selection, longitudinal topic evolution, topic impact/co-occurrence, canonical papers, and country specialization.
+- **Institutional analysis** uses the current geographic dataset or the unchanged `article_summary_with_country_classification` handoff file. A six-option dropdown generates one Global/EU × All/MCP/SCP network at a time, with publication rankings, collaboration maps, on-demand Cividis community visualizations, GraphML/CSV/Excel exports, optional topic-specific networks, and a separate opt-in statistical-validation view.
 - **Full workflow** retains the first complete analysis interface while each analytical phase is rebuilt into its own guided page.
 
 ## Input files
@@ -61,7 +62,8 @@ The Streamlit app preserves the notebook's current methods:
 - most-cited articles, recent highly cited papers, Bradford scattering, and team-size impact
 - country productivity, collaboration, impact, and temporal tables
 - Global and EU-only institutional networks for All, MCP, and SCP records
-- Louvain communities (with NetworkX modularity fallback)
+- optional topic-level institutional collaboration networks after LDA modeling
+- opt-in, auto-scaled K-fold centrality robustness, Louvain community stability, and configuration-model significance testing
 - unigram, bigram, trigram, quadgram, LDA/NMF evaluation, topic-assignment, and topic-evolution tables
 - CSV, Excel, 600-DPI PNG, vector SVG/PDF, and complete ZIP exports
 

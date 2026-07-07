@@ -9,6 +9,7 @@ from chronotome_ui.corpus_bibliometrics import render_corpus_bibliometrics
 from chronotome_ui.geographic_analysis import render_geographic_analysis
 from chronotome_ui.advanced_analyses import render_advanced_analyses
 from chronotome_ui.thematic_analysis import render_thematic_analysis
+from chronotome_ui.institutional_analysis import render_institutional_analysis
 from chronotome_ui.navigation import scroll_to_top
 
 st.set_page_config(page_title="Chronotome", page_icon="⏳", layout="wide")
@@ -23,7 +24,8 @@ with st.sidebar:
     st.title("Chronotome")
     page = st.radio(
         "Workflow", ["Home", "Data ingestion", "Entity resolution", "Corpus & production",
-                     "Geographic analysis", "Advanced analyses", "Thematic analysis", "Full workflow"],
+                     "Geographic analysis", "Advanced analyses", "Thematic analysis",
+                     "Institutional analysis", "Full workflow"],
         key="chronotome_page",
     )
     st.caption("Scopus + Web of Science · No OpenAlex integration")
@@ -46,6 +48,8 @@ elif page == "Advanced analyses":
     render_advanced_analyses()
 elif page == "Thematic analysis":
     render_thematic_analysis()
+elif page == "Institutional analysis":
+    render_institutional_analysis()
 else:
     # Kept intact while the new app is rebuilt phase by phase.
     import chronotome_ui.full_workflow  # noqa: F401

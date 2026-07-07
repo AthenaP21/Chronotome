@@ -485,8 +485,7 @@ def render_geographic_analysis():
             except Exception as exc:
                 st.error(f"An unexpected value stopped the {selected_country} case study: {exc}")
 
-    st.caption("Section 19 (longitudinal productivity cohorts) remains the next separate build step.")
     st.markdown("---")
-    if st.button("Continue to advanced analyses", type="primary", key="geographic-to-advanced"):
-        st.session_state["_chronotome_navigate_to"] = "Advanced analyses"
+    if st.button("Continue to institutional analysis", type="primary", key="geographic-to-institutional"):
+        st.session_state["_chronotome_navigate_to"] = "Institutional analysis"
         st.rerun()

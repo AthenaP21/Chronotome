@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import io
 import zipfile
+import networkx as nx
 from datetime import datetime
 
 from .analysis import (
@@ -21,6 +22,11 @@ from .geographic_bibliometrics import (
     geographic_distribution_analysis,
 )
 from .io import combine_by_source, inspect_uploads, inspect_source_uploads, load_uploads
+from .institutional_bibliometrics import (
+    advanced_institutional_validation, institutional_analysis,
+    institutional_community_visualization,
+    prepare_institutional_dataset,
+)
 from .preprocessing import apply_time_filter, deduplicate, enrich_affiliations, harmonize
 from .thematic_bibliometrics import (
     advanced_thematic_analysis, final_topic_models, prepare_thematic_dataset,
@@ -418,6 +424,141 @@ def run_advanced_thematic_analysis(data: pd.DataFrame, cooccurrence_threshold=0.
 def prepare_uploaded_thematic_dataset(data: pd.DataFrame):
     prepared, warnings = prepare_thematic_dataset(data)
     return {"data": prepared, "warnings": warnings}
+
+
+def _graphml_bytes(graph) -> bytes:
+    """Serialize a NetworkX graph without touching the filesystem."""
+    return "\n".join(nx.generate_graphml(graph)).encode("utf-8")
+
+
+def _institutional_exports(result: dict, archive_name: str) -> dict:
+    """Create notebook filenames plus CSV/XLSX/GraphML and vector figure formats."""
+    analysis_name = result["metadata"]["analysis_name"]
+    top_n_plot = result["config"]["top_n_plot"]
+    files: dict[str, bytes] = {
+        "Results/article_summary_with_country_classification.csv": dataframe_csv(result["prepared_data"]),
+        "Results/article_summary_with_country_classification.xlsx": dataframe_excel(
+            result["prepared_data"], "Geographic handoff"
+        ),
+        f"Results/Top_Institutions_By_Publications_{analysis_name}.csv": dataframe_csv(
+            result["tables"]["institution_ranking"]
+        ),
+        f"Results/Top_Institutions_By_Publications_{analysis_name}.xlsx": dataframe_excel(
+            result["tables"]["institution_ranking"], "Institution ranking"
+        ),
+        f"Results/Institution_Collaboration_Counts_{analysis_name}.csv": dataframe_csv(
+            result["tables"]["collaboration_counts"]
+        ),
+        f"Results/network_data_{analysis_name}.graphml": _graphml_bytes(result["full_graph"]),
+        f"Results/network_data_{analysis_name}_nodes.csv": dataframe_csv(result["tables"]["network_nodes"]),
+        f"Results/network_data_{analysis_name}_edges.csv": dataframe_csv(result["tables"]["network_edges"]),
+        "Results/Analysis_Summary_Report.xlsx": dataframe_excel(
+            result["tables"]["analysis_summary"], "Analysis summary"
+        ),
+    }
+    workbook = io.BytesIO()
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        for name, table in result["tables"].items():
+            if isinstance(table, pd.DataFrame):
+                table.to_excel(writer, index=False, sheet_name=name[:31])
+    files[f"Results/Institutional_Analysis_{analysis_name}.xlsx"] = workbook.getvalue()
+    for name, figure in result["figures"].items():
+        if figure is None:
+            continue
+        files[f"Plots/{name}.png"] = figure_png(figure, dpi=600)
+        files[f"Plots/{name}.svg"] = figure_svg(figure)
+        files[f"Plots/{name}.pdf"] = figure_pdf(figure)
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    files[archive_name] = archive_buffer.getvalue()
+    return {**result, "exports": files}
+
+
+def run_institutional_analysis(
+    data: pd.DataFrame, analysis_name="Global_All", top_n_list=1000,
+    top_n_plot=30, max_institutions_per_paper=50,
+):
+    result = institutional_analysis(
+        data, analysis_name=analysis_name, top_n_list=top_n_list,
+        top_n_plot=top_n_plot,
+        max_institutions_per_paper=max_institutions_per_paper,
+    )
+    return _institutional_exports(result, f"chronotome_institutional_{analysis_name}_outputs.zip")
+
+
+def run_topic_institutional_analysis(
+    data: pd.DataFrame, topic, top_n_list=1000, top_n_plot=25,
+    max_institutions_per_paper=50,
+):
+    if "Dominant_Topic" not in data.columns:
+        raise ValueError("Run the final LDA topic model before topic-level institutional analysis.")
+    topic_frame = data[data["Dominant_Topic"].astype(str) == str(topic)].copy()
+    if topic_frame.empty:
+        raise ValueError(f"Topic {topic} has no articles.")
+    safe_topic = str(topic).replace(".", "_")
+    result = institutional_analysis(
+        topic_frame, analysis_name="Global_All", output_name=f"Topic_{safe_topic}",
+        top_n_list=top_n_list, top_n_plot=top_n_plot,
+        max_institutions_per_paper=max_institutions_per_paper,
+    )
+    result["metadata"]["topic"] = topic
+    return _institutional_exports(result, f"chronotome_institutional_Topic_{safe_topic}_outputs.zip")
+
+
+def run_advanced_institutional_validation(
+    institutional_result: dict, n_splits=5, null_iterations=100, core_max_nodes=3500,
+):
+    result = advanced_institutional_validation(
+        institutional_result["full_graph"], institutional_result["tables"]["collaboration_counts"],
+        institutional_result["metadata"]["analysis_name"], n_splits=n_splits,
+        null_iterations=null_iterations, core_max_nodes=core_max_nodes,
+    )
+    files: dict[str, bytes] = {}
+    workbook = io.BytesIO()
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        for name, table in result["tables"].items():
+            files[f"Results/{name}_{result['metadata']['network_type']}.csv"] = dataframe_csv(table)
+            table.to_excel(writer, index=False, sheet_name=name[:31])
+    files[f"Results/Advanced_Network_Validation_{result['metadata']['network_type']}.xlsx"] = workbook.getvalue()
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    files["chronotome_advanced_institutional_validation.zip"] = archive_buffer.getvalue()
+    return {**result, "exports": files}
+
+
+def run_institutional_community_visualization(
+    institutional_result: dict, validation_result: dict | None = None,
+    top_n_to_plot: int | None = None,
+):
+    """Generate and export the selected network's advanced community figure."""
+    communities = None
+    if validation_result and validation_result.get("metadata", {}).get("network_type") == institutional_result.get("metadata", {}).get("analysis_name"):
+        communities = validation_result.get("communities")
+    result = institutional_community_visualization(
+        institutional_result, communities=communities, top_n_to_plot=top_n_to_plot,
+    )
+    basename = result["basename"]
+    files: dict[str, bytes] = {
+        f"Plots/{basename}.png": figure_png(result["figure"], dpi=600),
+        f"Plots/{basename}.svg": figure_svg(result["figure"]),
+        f"Plots/{basename}.pdf": figure_pdf(result["figure"]),
+    }
+    workbook = io.BytesIO()
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        for name, table in result["tables"].items():
+            files[f"Results/{name}_{result['metadata']['network_type']}.csv"] = dataframe_csv(table)
+            table.to_excel(writer, index=False, sheet_name=name[:31])
+    files[f"Results/Institutional_Communities_{result['metadata']['network_type']}.xlsx"] = workbook.getvalue()
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    files[f"chronotome_institutional_communities_{result['metadata']['network_type']}.zip"] = archive_buffer.getvalue()
+    return {**result, "exports": files}
 
 
 def run_chronotome(uploaded_file, config=None):

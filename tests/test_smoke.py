@@ -12,6 +12,9 @@ from chronotome_core import (
     run_advanced_analyses, run_advanced_thematic_analysis, run_chronotome, run_corpus_bibliometrics,
     run_country_case_study, run_entity_resolution,
     run_final_topic_models, run_geographic_bibliometrics, run_ingestion,
+    run_institutional_analysis, run_topic_institutional_analysis,
+    run_advanced_institutional_validation,
+    run_institutional_community_visualization,
     run_thematic_preprocessing, run_topic_model_evaluation,
 )
 from chronotome_core.entity_resolution import validate_institution_alias_json
@@ -35,6 +38,75 @@ class JsonUpload(io.BytesIO):
 
 
 class ChronotomeSmokeTest(unittest.TestCase):
+    def test_institutional_six_scope_filters_and_exports(self):
+        rows = [
+            {
+                "Title": "EU MCP", "Countries_Extracted": ["Germany", "France"],
+                "Institutions_Extracted": ["Institute A", "Institute B"],
+            },
+            {
+                "Title": "EU SCP", "Countries_Extracted": ["Germany"],
+                "Institutions_Extracted": ["Institute A", "Institute C"],
+            },
+            {
+                "Title": "Global MCP", "Countries_Extracted": ["Germany", "United States"],
+                "Institutions_Extracted": ["Institute A", "Institute D"],
+            },
+            {
+                "Title": "Global SCP", "Countries_Extracted": ["United States"],
+                "Institutions_Extracted": ["Institute D", "Institute E"],
+            },
+        ]
+        frame = pd.DataFrame(rows)
+        expected_articles = {
+            "Global_All": 4, "Global_MCP": 2, "Global_SCP": 2,
+            "EU_All": 2, "EU_MCP": 1, "EU_SCP": 1,
+        }
+        for name, expected in expected_articles.items():
+            result = run_institutional_analysis(frame, analysis_name=name, top_n_plot=5)
+            self.assertEqual(result["metadata"]["articles"], expected)
+            self.assertEqual(tuple(result["figures"][f"Top_10_Institutions_By_Publications_{name}"].get_size_inches()), (10.0, 6.0))
+            self.assertIn(f"Results/network_data_{name}.graphml", result["exports"])
+            self.assertIn(f"Results/Top_Institutions_By_Publications_{name}.xlsx", result["exports"])
+            self.assertIn(f"chronotome_institutional_{name}_outputs.zip", result["exports"])
+
+        global_result = run_institutional_analysis(frame, analysis_name="Global_All", top_n_plot=5)
+        network_figure = global_result["figures"]["Collaboration_Network_Top_5_Global_All"]
+        self.assertEqual(tuple(network_figure.get_size_inches()), (18.0, 16.0))
+        self.assertEqual(global_result["metadata"]["network_edges"], 4)
+        validation = run_advanced_institutional_validation(global_result, null_iterations=2)
+        self.assertIn("centrality_consistency_scores", validation["tables"])
+        self.assertIn("chronotome_advanced_institutional_validation.zip", validation["exports"])
+        communities = run_institutional_community_visualization(
+            global_result, validation_result=validation, top_n_to_plot=5,
+        )
+        self.assertEqual(tuple(communities["figure"].get_size_inches()), (22.0, 22.0))
+        self.assertEqual(communities["metadata"]["community_source"], "Validated Consensus Communities")
+        self.assertIn("community_membership", communities["tables"])
+        self.assertIn(f"Plots/{communities['basename']}.png", communities["exports"])
+        self.assertIn(f"Plots/{communities['basename']}.svg", communities["exports"])
+        self.assertIn(f"Plots/{communities['basename']}.pdf", communities["exports"])
+        self.assertIn("chronotome_institutional_communities_Global_All.zip", communities["exports"])
+
+    def test_institutional_mega_consortium_and_topic_network(self):
+        frame = pd.DataFrame([
+            {
+                "Title": "Topic paper", "Countries_Extracted": ["Germany"],
+                "Institutions_Extracted": ["Institute A", "Institute B"], "Dominant_Topic": 1,
+            },
+            {
+                "Title": "Consortium", "Countries_Extracted": ["France"],
+                "Institutions_Extracted": [f"Consortium {i}" for i in range(6)], "Dominant_Topic": 2,
+            },
+        ])
+        result = run_institutional_analysis(
+            frame, analysis_name="Global_All", top_n_plot=5, max_institutions_per_paper=5,
+        )
+        self.assertEqual(result["metadata"]["excluded_large_papers"], 1)
+        topic = run_topic_institutional_analysis(frame, 1, top_n_plot=5)
+        self.assertEqual(topic["metadata"]["analysis_name"], "Topic_1")
+        self.assertIn("Plots/Top_10_Institutions_By_Publications_Topic_1.svg", topic["exports"])
+
     def test_empty_search_string_preserves_ai_and_ml_bigrams(self):
         data = pd.DataFrame({
             "Title": ["Artificial intelligence and machine learning"] * 3,
