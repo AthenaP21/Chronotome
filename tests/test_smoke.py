@@ -2,7 +2,9 @@
 
 import io
 import json
+import zipfile
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 from matplotlib.colors import to_hex
@@ -15,6 +17,7 @@ from chronotome_core import (
     run_institutional_analysis, run_topic_institutional_analysis,
     run_advanced_institutional_validation,
     run_institutional_community_visualization,
+    run_all_workflow,
     run_thematic_preprocessing, run_topic_model_evaluation,
 )
 from chronotome_core.entity_resolution import validate_institution_alias_json
@@ -38,6 +41,70 @@ class JsonUpload(io.BytesIO):
 
 
 class ChronotomeSmokeTest(unittest.TestCase):
+    def test_full_background_workflow_packages_all_stages_without_validation(self):
+        frame = pd.DataFrame({
+            "Title": ["Paper A", "Paper B"],
+            "Dominant_Topic": [1, 1],
+            "Institutions_Extracted": [["A", "B"], ["A", "C"]],
+            "Countries_Extracted": [["Germany"], ["Germany", "France"]],
+        })
+        base_exports = {"Results/table.xlsx": b"xlsx", "Plots/figure.svg": b"svg"}
+        ingestion = {"processed_data": frame, "warnings": [], "exports": base_exports}
+        entity = {"article_summary": frame, "warnings": [], "exports": base_exports}
+        ordinary = {"data": frame, "warnings": [], "exports": base_exports}
+        evaluation = {
+            "best_k": 2, "best_nmf_k": 2, "warnings": [], "exports": base_exports,
+        }
+
+        def institutional_side_effect(data, analysis_name, **kwargs):
+            return {
+                "data": frame, "warnings": [], "exports": base_exports,
+                "metadata": {"analysis_name": analysis_name},
+            }
+
+        def community_side_effect(result, **kwargs):
+            name = result["metadata"]["analysis_name"]
+            return {
+                "warnings": [],
+                "exports": {
+                    f"Plots/community_{name}.png": b"png",
+                    f"Results/community_{name}.xlsx": b"xlsx",
+                },
+            }
+
+        with (
+            patch("chronotome_core.runner.run_ingestion", return_value=ingestion),
+            patch("chronotome_core.runner.run_entity_resolution", return_value=entity),
+            patch("chronotome_core.runner.run_corpus_bibliometrics", return_value=ordinary),
+            patch("chronotome_core.runner.run_geographic_bibliometrics", return_value=ordinary),
+            patch("chronotome_core.runner.run_advanced_analyses", return_value=ordinary),
+            patch("chronotome_core.runner.run_thematic_preprocessing", return_value=ordinary),
+            patch("chronotome_core.runner.run_topic_model_evaluation", return_value=evaluation),
+            patch("chronotome_core.runner.run_final_topic_models", return_value=ordinary),
+            patch("chronotome_core.runner.run_advanced_thematic_analysis", return_value=ordinary),
+            patch("chronotome_core.runner.run_institutional_analysis", side_effect=institutional_side_effect) as run_inst,
+            patch("chronotome_core.runner.run_institutional_community_visualization", side_effect=community_side_effect) as run_comm,
+            patch("chronotome_core.runner.run_advanced_institutional_validation") as forbidden_validation,
+        ):
+            result = run_all_workflow(
+                scopus_files=[object()], modes={"Scopus": "single", "WoS": "single"},
+                config={"run_topic_institutional": False},
+            )
+
+        self.assertEqual(run_inst.call_count, 6)
+        self.assertEqual(run_comm.call_count, 6)
+        forbidden_validation.assert_not_called()
+        self.assertEqual(set(result["community_results"]), {
+            "Global_All", "Global_MCP", "Global_SCP", "EU_All", "EU_MCP", "EU_SCP",
+        })
+        archive = zipfile.ZipFile(io.BytesIO(result["exports"]["chronotome_complete_background_workflow.zip"]))
+        names = archive.namelist()
+        self.assertTrue(any(name.endswith(".xlsx") for name in names))
+        self.assertTrue(any("/Plots/" in name for name in names))
+        self.assertFalse(any(name.lower().endswith(".zip") for name in names))
+        validation_row = result["manifest"].iloc[-1]
+        self.assertEqual(validation_row["Status"], "Excluded by design")
+
     def test_institutional_six_scope_filters_and_exports(self):
         rows = [
             {
