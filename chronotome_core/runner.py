@@ -29,6 +29,7 @@ from .institutional_bibliometrics import (
 )
 from .preprocessing import apply_time_filter, deduplicate, enrich_affiliations, harmonize
 from .thematic_bibliometrics import (
+    DEFAULT_BLOCKLIST_PHRASES, DEFAULT_NOISE_LISTS,
     advanced_thematic_analysis, final_topic_models, prepare_thematic_dataset,
     thematic_preprocessing, topic_model_evaluation,
 )
@@ -559,6 +560,237 @@ def run_institutional_community_visualization(
             archive.writestr(name, content)
     files[f"chronotome_institutional_communities_{result['metadata']['network_type']}.zip"] = archive_buffer.getvalue()
     return {**result, "exports": files}
+
+
+def run_all_workflow(
+    scopus_files=None, wos_files=None, modes=None, config=None,
+    ingestion_result: dict | None = None, progress_callback=None,
+):
+    """Run every modern Chronotome stage through community visualization.
+
+    Statistical institutional-network validation is intentionally excluded.
+    Individual stage runners remain authoritative, so this convenience path
+    cannot drift from the guided pages' analytical logic.
+    """
+    config = {
+        "enable_time_filter": True, "collection_year": None,
+        "top_n": 10, "min_source_papers": 5,
+        "country_min_papers": 5, "institutional_top_n_plot": 30,
+        "max_institutions_per_paper": 50,
+        "topic_k_values": list(range(3, 11)), "thematic_min_df": None,
+        "topic_model_min_df": 2, "topic_bin_duration": 5,
+        "run_topic_institutional": True,
+        "community_top_n_global": 50, "community_top_n_eu": 30,
+        **(config or {}),
+    }
+    stages: dict[str, dict] = {}
+    manifest_rows: list[dict] = []
+    warnings: list[str] = []
+
+    def notify(stage: str, state: str, detail: str = ""):
+        if progress_callback is not None:
+            progress_callback(stage, state, detail)
+
+    def record(stage_key: str, label: str, result: dict | None, status="Complete", detail=""):
+        if result is not None:
+            stages[stage_key] = result
+        stage_warnings = result.get("warnings", []) if result else []
+        warnings.extend(stage_warnings)
+        documents = ""
+        if result:
+            for data_key in ("data", "processed_data", "article_summary"):
+                if isinstance(result.get(data_key), pd.DataFrame):
+                    documents = len(result[data_key])
+                    break
+        manifest_rows.append({
+            "Stage": label, "Status": status, "Documents": documents,
+            "Warnings": len(stage_warnings), "Detail": detail,
+        })
+
+    notify("Data ingestion", "running")
+    if ingestion_result is None:
+        ingestion_result = run_ingestion(
+            scopus_files=scopus_files, wos_files=wos_files, modes=modes,
+            config={
+                "enable_time_filter": bool(config["enable_time_filter"]),
+                "collection_year": config["collection_year"],
+            },
+        )
+    record("01_ingestion", "Data ingestion", ingestion_result)
+    notify("Data ingestion", "complete", f"{len(ingestion_result['processed_data']):,} records")
+
+    notify("Entity resolution", "running")
+    entity = run_entity_resolution(ingestion_result["processed_data"])
+    record("02_entity_resolution", "Entity resolution", entity)
+    notify("Entity resolution", "complete", f"{len(entity['article_summary']):,} articles")
+
+    notify("Corpus and production", "running")
+    corpus = run_corpus_bibliometrics(
+        entity["article_summary"], cutoff_year=config["collection_year"],
+        top_n=int(config["top_n"]), min_source_papers=int(config["min_source_papers"]),
+    )
+    record("03_corpus_and_production", "Corpus and production", corpus)
+    notify("Corpus and production", "complete")
+
+    notify("Geographic analysis", "running")
+    geographic = run_geographic_bibliometrics(
+        corpus["data"], min_papers=int(config["country_min_papers"]),
+        advanced_min_publications=int(config["country_min_papers"]),
+    )
+    record("04_geographic_analysis", "Geographic analysis", geographic)
+    notify("Geographic analysis", "complete")
+
+    notify("Advanced evaluative analyses", "running")
+    advanced = run_advanced_analyses(geographic["data"])
+    record("05_advanced_evaluative", "Advanced evaluative analyses", advanced)
+    notify("Advanced evaluative analyses", "complete")
+
+    thematic_final = None
+    notify("Thematic preprocessing", "running")
+    try:
+        thematic_preprocessed = run_thematic_preprocessing(
+            geographic["data"], "", DEFAULT_NOISE_LISTS, DEFAULT_BLOCKLIST_PHRASES,
+            min_df=config["thematic_min_df"],
+        )
+        record("06_thematic_preprocessing", "Thematic preprocessing", thematic_preprocessed)
+        notify("Thematic preprocessing", "complete")
+
+        notify("Automatic topic evaluation", "running")
+        topic_evaluation = run_topic_model_evaluation(
+            thematic_preprocessed["data"], config["topic_k_values"],
+            min_df=int(config["topic_model_min_df"]),
+        )
+        record("07_topic_evaluation", "Automatic topic evaluation", topic_evaluation)
+        notify(
+            "Automatic topic evaluation", "complete",
+            f"LDA k={topic_evaluation['best_k']}; NMF k={topic_evaluation['best_nmf_k']}",
+        )
+
+        notify("Final topic models", "running")
+        thematic_final = run_final_topic_models(
+            thematic_preprocessed["data"], topic_evaluation["best_k"],
+            topic_evaluation["best_nmf_k"],
+            bin_duration=int(config["topic_bin_duration"]),
+            min_df=int(config["topic_model_min_df"]),
+        )
+        record("08_final_topic_models", "Final LDA/NMF topic models", thematic_final)
+        notify("Final topic models", "complete")
+
+        notify("Advanced thematic analyses", "running")
+        thematic_advanced = run_advanced_thematic_analysis(thematic_final["data"])
+        record("09_advanced_thematic", "Advanced thematic analyses", thematic_advanced)
+        notify("Advanced thematic analyses", "complete")
+    except Exception as exc:
+        detail = f"Thematic branch skipped after an analysis constraint: {exc}"
+        warnings.append(detail)
+        record("06_thematic_status", "Thematic analysis", None, status="Skipped", detail=detail)
+        notify("Thematic analysis", "skipped", str(exc))
+
+    if thematic_final is not None and bool(config["run_topic_institutional"]):
+        topics = sorted(thematic_final["data"]["Dominant_Topic"].dropna().unique(), key=lambda value: str(value))
+        for topic in topics:
+            label = f"Topic {topic} institutional network"
+            notify(label, "running")
+            try:
+                topic_result = run_topic_institutional_analysis(
+                    thematic_final["data"], topic,
+                    top_n_plot=min(25, int(config["institutional_top_n_plot"])),
+                    max_institutions_per_paper=int(config["max_institutions_per_paper"]),
+                )
+                safe_topic = str(topic).replace(".", "_")
+                record(f"10_topic_{safe_topic}_institutions", label, topic_result)
+                notify(label, "complete")
+            except Exception as exc:
+                detail = str(exc)
+                record(f"10_topic_{topic}_status", label, None, status="Skipped", detail=detail)
+                warnings.append(f"{label} skipped: {detail}")
+                notify(label, "skipped", detail)
+
+    institutional_results: dict[str, dict] = {}
+    community_results: dict[str, dict] = {}
+    analysis_names = ("Global_All", "Global_MCP", "Global_SCP", "EU_All", "EU_MCP", "EU_SCP")
+    for index, analysis_name in enumerate(analysis_names, 1):
+        label = f"Institutional analysis: {analysis_name}"
+        notify(label, "running")
+        try:
+            institutional = run_institutional_analysis(
+                geographic["data"], analysis_name=analysis_name,
+                top_n_plot=int(config["institutional_top_n_plot"]),
+                max_institutions_per_paper=int(config["max_institutions_per_paper"]),
+            )
+            institutional_results[analysis_name] = institutional
+            record(f"{20 + index:02d}_institutional_{analysis_name}", label, institutional)
+            notify(label, "complete")
+        except Exception as exc:
+            detail = str(exc)
+            record(f"{20 + index:02d}_institutional_{analysis_name}", label, None, status="Skipped", detail=detail)
+            warnings.append(f"{label} skipped: {detail}")
+            notify(label, "skipped", detail)
+            continue
+
+        community_label = f"Community visualization: {analysis_name}"
+        notify(community_label, "running")
+        try:
+            top_n = (
+                int(config["community_top_n_global"])
+                if analysis_name.startswith("Global") else int(config["community_top_n_eu"])
+            )
+            community = run_institutional_community_visualization(
+                institutional, top_n_to_plot=top_n,
+            )
+            community_results[analysis_name] = community
+            record(f"{30 + index:02d}_communities_{analysis_name}", community_label, community)
+            notify(community_label, "complete")
+        except Exception as exc:
+            detail = str(exc)
+            record(f"{30 + index:02d}_communities_{analysis_name}", community_label, None, status="Skipped", detail=detail)
+            warnings.append(f"{community_label} skipped: {detail}")
+            notify(community_label, "skipped", detail)
+
+    manifest_rows.append({
+        "Stage": "Advanced statistical institutional validation", "Status": "Excluded by design",
+        "Documents": "", "Warnings": 0,
+        "Detail": "The one-click workflow stops after community visualization, as requested.",
+    })
+    manifest = pd.DataFrame(manifest_rows)
+
+    archive_buffer = io.BytesIO()
+    included_files = 0
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("00_Workflow_Summary/full_workflow_manifest.xlsx", dataframe_excel(manifest, "Workflow manifest"))
+        archive.writestr("00_Workflow_Summary/full_workflow_manifest.csv", dataframe_csv(manifest))
+        archive.writestr(
+            "00_Workflow_Summary/README.txt",
+            (
+                "Chronotome complete background workflow\n"
+                "Includes ingestion through institutional community visualization.\n"
+                "Advanced statistical network validation is intentionally excluded.\n"
+                "Each stage folder contains its Excel/CSV tables, publication-grade plots, and network files.\n"
+            ).encode("utf-8"),
+        )
+        for stage_key, stage_result in stages.items():
+            for path, content in stage_result.get("exports", {}).items():
+                if path.lower().endswith(".zip"):
+                    continue
+                safe_path = path.lstrip("/")
+                archive.writestr(f"{stage_key}/{safe_path}", content)
+                included_files += 1
+    exports = {
+        "chronotome_complete_background_workflow.zip": archive_buffer.getvalue(),
+        "full_workflow_manifest.xlsx": dataframe_excel(manifest, "Workflow manifest"),
+    }
+    notify("Complete workflow", "complete", f"{included_files:,} files packaged")
+    return {
+        "stages": stages, "manifest": manifest,
+        "ingestion": ingestion_result, "entity_resolution": entity,
+        "corpus": corpus, "geographic": geographic, "advanced": advanced,
+        "thematic_final": thematic_final,
+        "institutional_results": institutional_results,
+        "community_results": community_results,
+        "warnings": list(dict.fromkeys(warnings)), "exports": exports,
+        "metadata": {"packaged_files": included_files, "documents": len(geographic["data"])},
+        "config": config,
+    }
 
 
 def run_chronotome(uploaded_file, config=None):

@@ -8,6 +8,7 @@ from .runner import (
     run_institutional_analysis, run_topic_institutional_analysis,
     run_advanced_institutional_validation,
     run_institutional_community_visualization,
+    run_all_workflow,
     run_thematic_preprocessing, run_topic_model_evaluation,
 )
 
@@ -20,4 +21,5 @@ __all__ = [
     "run_institutional_analysis", "run_topic_institutional_analysis",
     "run_advanced_institutional_validation",
     "run_institutional_community_visualization",
+    "run_all_workflow",
 ]

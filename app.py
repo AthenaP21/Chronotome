@@ -10,6 +10,7 @@ from chronotome_ui.geographic_analysis import render_geographic_analysis
 from chronotome_ui.advanced_analyses import render_advanced_analyses
 from chronotome_ui.thematic_analysis import render_thematic_analysis
 from chronotome_ui.institutional_analysis import render_institutional_analysis
+from chronotome_ui.full_workflow import render_full_workflow
 from chronotome_ui.navigation import scroll_to_top
 
 st.set_page_config(page_title="Chronotome", page_icon="⏳", layout="wide")
@@ -51,5 +52,4 @@ elif page == "Thematic analysis":
 elif page == "Institutional analysis":
     render_institutional_analysis()
 else:
-    # Kept intact while the new app is rebuilt phase by phase.
-    import chronotome_ui.full_workflow  # noqa: F401
+    render_full_workflow()
