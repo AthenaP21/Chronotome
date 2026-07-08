@@ -53,7 +53,7 @@ def render_full_workflow():
     )
     st.info(
         "This is the one-click route for users who want every result without visiting each page. "
-        "Advanced statistical network validation is the only excluded stage because it is intentionally opt-in."
+        "It packages the workflow outputs into one downloadable ZIP when the background run finishes."
     )
 
     _section(1, "Choose the workflow input")

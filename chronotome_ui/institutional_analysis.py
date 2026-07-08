@@ -1,4 +1,4 @@
-"""Part 4 institutional productivity, collaboration, and optional validation page."""
+"""Part 4 institutional productivity, collaboration, and community analysis."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from chronotome_core import (
-    run_advanced_institutional_validation, run_institutional_analysis,
-    run_institutional_community_visualization,
+    run_institutional_analysis, run_institutional_community_visualization,
     run_topic_institutional_analysis,
 )
 from chronotome_ui.figure_preview import render_svg
@@ -109,83 +108,7 @@ def _matching_topic_dataset(data: pd.DataFrame):
     return candidate if tuple(candidate.index) == tuple(data.index) else None
 
 
-def _render_validation_view():
-    result = st.session_state.get("institutional-validation-source")
-    if result is None:
-        st.session_state["institutional-view"] = "overview"
-        st.rerun()
-    if st.button("← Back to Institutional Analysis", type="primary"):
-        st.session_state["institutional-view"] = "overview"
-        st.session_state["_chronotome_scroll_top"] = True
-        st.rerun()
-
-    name = result["metadata"]["analysis_name"]
-    st.title(f"Advanced Institutional Network Validation: {name.replace('_', ' ')}")
-    st.caption("Optional statistical evaluation · K-fold centrality stability, Louvain robustness, and null-model comparison")
-    st.warning(
-        "This is intentionally separate from the descriptive institutional page. It can be computationally "
-        "expensive and does not run unless you click the button below."
-    )
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Full-network nodes", f"{result['metadata']['network_nodes']:,}")
-    c2.metric("Full-network edges", f"{result['metadata']['network_edges']:,}")
-    c3.metric("Validation mode", "Auto-scaled")
-
-    _section(1, "Method and validation scope")
-    st.markdown(
-        "The validation uses the largest connected component. If it exceeds 3,500 nodes, it uses a "
-        "top-weighted-degree core while leaving the exported full network untouched. Five-fold stability "
-        "is assessed for degree, betweenness, closeness, and eigenvector centrality. Community stability "
-        "is measured with NMI and compared with 100 configuration-model networks."
-    )
-    token = (
-        st.session_state.get("institutional-active-signature"), name,
-        result["metadata"]["network_nodes"], result["metadata"]["network_edges"],
-    )
-    validation = st.session_state.get("institutional-validation-result")
-    current = validation is not None and st.session_state.get("institutional-validation-token") == token
-    label = "Regenerate statistical validation" if current else "Run advanced statistical validation"
-    if st.button(label, type="primary", key="run-institutional-validation"):
-        try:
-            with st.spinner("Running K-fold stability and configuration-model validation…"):
-                validation = run_advanced_institutional_validation(result)
-            st.session_state["institutional-validation-result"] = validation
-            st.session_state["institutional-validation-token"] = token
-            current = True
-        except (ValueError, KeyError) as exc:
-            st.error(f"Validation could not run: {exc}")
-        except Exception as exc:
-            st.error(f"An unexpected network value stopped validation: {exc}")
-    if not current:
-        return
-
-    tables, exports = validation["tables"], validation["exports"]
-    _section(2, "Statistical validation summary")
-    st.dataframe(tables["validation_summary"], width="stretch", hide_index=True)
-    _section(3, "Centrality robustness", "Average pairwise correlation across the five training folds.")
-    st.dataframe(tables["centrality_consistency_scores"], width="stretch", hide_index=True)
-    _section(4, "Community structure and null model")
-    st.dataframe(tables["consensus_communities"], width="stretch", hide_index=True)
-    with st.expander("Null-model iteration values"):
-        st.dataframe(tables["null_model_distribution"], width="stretch", hide_index=True)
-    _section(5, "Validation downloads")
-    st.download_button(
-        "Download complete validation package (ZIP)",
-        exports["chronotome_advanced_institutional_validation.zip"],
-        f"{name}_advanced_network_validation.zip", "application/zip", type="primary",
-    )
-    workbook = f"Results/Advanced_Network_Validation_{name}.xlsx"
-    st.download_button(
-        "Download validation workbook (Excel)", exports[workbook], workbook.split("/")[-1],
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-
 def render_institutional_analysis():
-    if st.session_state.get("institutional-view") == "validation":
-        _render_validation_view()
-        return
-
     st.title("Institutional Analysis")
     st.markdown(
         "Part 4 ranks institutional productivity and maps collaboration for six complementary scopes: "
@@ -306,18 +229,7 @@ def render_institutional_analysis():
              "Color = community; node size = full-network collaboration strength; dark edges = within-community ties.")
     community_cache = st.session_state.setdefault("institutional-community-cache", {})
     cached_community = community_cache.get(analysis_name)
-    validation_result = st.session_state.get("institutional-validation-result")
-    validation_matches = (
-        validation_result is not None
-        and validation_result.get("metadata", {}).get("network_type") == analysis_name
-    )
-    if validation_matches:
-        st.success("Validated communities are available and will be used for this visualization.")
-    else:
-        st.caption(
-            "This will run deterministic weighted Louvain community detection. If you later complete "
-            "statistical validation for this mode, regenerate the figure to use the validated partition."
-        )
+    st.caption("This runs deterministic weighted Louvain community detection for the selected network.")
     button_label = "Regenerate communities :D" if cached_community else "Generate communities :D"
     if metadata["network_edges"] == 0:
         st.caption("Community detection requires at least one collaboration edge.")
@@ -326,13 +238,10 @@ def render_institutional_analysis():
             default_community_top_n = 50 if analysis_name.startswith("Global") else 30
             with st.spinner(f"Detecting and arranging {analysis_name} communities…"):
                 community_result = run_institutional_community_visualization(
-                    result,
-                    validation_result=validation_result if validation_matches else None,
-                    top_n_to_plot=default_community_top_n,
+                    result, top_n_to_plot=default_community_top_n,
                 )
             community_cache[analysis_name] = {
                 "signature": signature,
-                "validated": validation_matches,
                 "result": community_result,
             }
             for cached_name in list(community_cache):
@@ -446,13 +355,3 @@ def render_institutional_analysis():
                 f"Download Topic {selected_topic} institutional package (ZIP)",
                 topic_result["exports"][topic_archive], topic_archive, "application/zip",
             )
-
-    _section(10, "Advanced statistical network evaluation (optional)",
-             "Open a separate focused view for centrality stability, community robustness, and null-model significance.")
-    if metadata["network_edges"] == 0:
-        st.caption("Statistical validation requires a network with collaboration edges.")
-    elif st.button("Open optional statistical validation", type="primary", key="open-institutional-validation"):
-        st.session_state["institutional-validation-source"] = result
-        st.session_state["institutional-view"] = "validation"
-        st.session_state["_chronotome_scroll_top"] = True
-        st.rerun()

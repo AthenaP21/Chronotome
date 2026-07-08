@@ -240,13 +240,12 @@ def institution_networks(data: pd.DataFrame, max_institutions_per_paper=50) -> t
         communities = []
         if graph.number_of_edges():
             try:
-                import community.community_louvain as community_louvain
-                partition = community_louvain.best_partition(graph, weight="weight", random_state=42)
-                grouped: dict[int, list[str]] = {}
-                for node, group in partition.items():
-                    grouped.setdefault(group, []).append(node)
-                communities = sorted(grouped.values(), key=len, reverse=True)
-            except ImportError:
+                communities = [
+                    sorted(group) for group in nx.community.louvain_communities(
+                        graph, weight="weight", seed=42
+                    )
+                ]
+            except (AttributeError, nx.NetworkXError):
                 communities = [sorted(group) for group in nx.community.greedy_modularity_communities(graph, weight="weight")]
         key = f"{region}_{publication_type}"
         networks[key] = {"graph": graph, "ranking": ranking, "edges": edge_table, "communities": communities}

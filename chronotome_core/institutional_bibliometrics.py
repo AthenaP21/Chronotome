@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import re
 import textwrap
-from collections import Counter, defaultdict
+from collections import Counter
 from itertools import combinations
 
 import matplotlib
@@ -361,146 +361,8 @@ def institutional_analysis(
     }
 
 
-def _safe_correlation(series: list[pd.Series]) -> float:
-    if len(series) < 2:
-        return np.nan
-    matrix = pd.concat(series, axis=1).fillna(0).corr()
-    upper = matrix.where(np.triu(np.ones(matrix.shape), k=1).astype(bool)).stack()
-    return float(upper.mean()) if not upper.empty else np.nan
-
-
-def advanced_institutional_validation(
-    graph: nx.Graph, collaboration_counts: pd.DataFrame, network_type: str,
-    n_splits: int = 5, null_iterations: int = 100, core_max_nodes: int = 3500,
-) -> dict:
-    """Opt-in K-fold centrality/community validation with an empirical null model."""
-    if graph.number_of_nodes() == 0 or collaboration_counts.empty:
-        raise ValueError("The selected institutional network has no collaboration links to validate.")
-    largest = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
-    scope_note = "Largest connected component"
-    if largest.number_of_nodes() > int(core_max_nodes):
-        degrees = dict(largest.degree(weight="weight"))
-        keep = sorted(degrees, key=degrees.get, reverse=True)[:int(core_max_nodes)]
-        largest = largest.subgraph(keep).copy()
-        scope_note = f"Top-degree core of largest connected component ({int(core_max_nodes)} node cap)"
-    nodes = set(largest.nodes())
-    edges = collaboration_counts[
-        collaboration_counts["Institution1"].isin(nodes)
-        & collaboration_counts["Institution2"].isin(nodes)
-    ].copy().reset_index(drop=True)
-    splits = min(int(n_splits), len(edges))
-    if splits < 2:
-        raise ValueError("At least two collaboration links are required for validation.")
-    rng = np.random.default_rng(42)
-    assignments = np.arange(len(edges)) % splits
-    rng.shuffle(assignments)
-    fold_centrality: dict[str, list[pd.Series]] = defaultdict(list)
-    partitions = []
-    node_order = sorted(nodes)
-    for fold in range(splits):
-        training = edges[assignments != fold]
-        fold_graph = nx.from_pandas_edgelist(
-            training, "Institution1", "Institution2", edge_attr="Collaboration_Count", create_using=nx.Graph()
-        )
-        metrics = {
-            "Degree Centrality": nx.degree_centrality(fold_graph),
-            "Betweenness Centrality": nx.betweenness_centrality(fold_graph, weight=None),
-            "Closeness Centrality": nx.closeness_centrality(fold_graph),
-        }
-        try:
-            metrics["Eigenvector Centrality"] = nx.eigenvector_centrality(
-                fold_graph, weight="Collaboration_Count", max_iter=1000
-            )
-        except (nx.NetworkXException, nx.PowerIterationFailedConvergence):
-            metrics["Eigenvector Centrality"] = {}
-        for metric, values in metrics.items():
-            fold_centrality[metric].append(pd.Series(values).reindex(node_order, fill_value=0))
-        communities = list(nx.community.louvain_communities(
-            fold_graph, weight="Collaboration_Count", seed=42 + fold
-        ))
-        partitions.append(communities)
-
-    consistency = pd.DataFrame([{
-        "Metric": metric, "Average_Correlation": _safe_correlation(values)
-    } for metric, values in fold_centrality.items()])
-
-    def labels_for(communities):
-        mapping = {}
-        for index, community in enumerate(communities):
-            for node in community:
-                mapping[node] = index
-        return [mapping.get(node, -1) for node in node_order]
-
-    from sklearn.metrics import normalized_mutual_info_score
-    fold_labels = [labels_for(partition) for partition in partitions]
-    observed_values = [
-        normalized_mutual_info_score(fold_labels[first], fold_labels[second])
-        for first, second in combinations(range(len(fold_labels)), 2)
-    ]
-    observed = float(np.mean(observed_values)) if observed_values else np.nan
-    reference = list(nx.community.louvain_communities(largest, weight="weight", seed=42))
-    community_rows = []
-    for index, community in enumerate(sorted(reference, key=len, reverse=True), 1):
-        ordered = sorted(community, key=lambda node: largest.degree(node, weight="weight"), reverse=True)
-        community_rows.append({
-            "Community": index, "Size": len(community),
-            "Leading_Institutions": "; ".join(ordered[:10]),
-        })
-    communities = pd.DataFrame(community_rows)
-
-    degree_sequence = [degree for _, degree in largest.degree()]
-    null_values = []
-    for iteration in range(max(1, int(null_iterations))):
-        null_multi = nx.configuration_model(degree_sequence, seed=777 + iteration)
-        null_graph = nx.Graph(null_multi)
-        null_graph.remove_edges_from(nx.selfloop_edges(null_graph))
-        null_nodes = list(null_graph.nodes())
-        if null_graph.number_of_edges() < splits:
-            continue
-        null_edges = list(null_graph.edges())
-        null_assignments = np.arange(len(null_edges)) % splits
-        rng_iter = np.random.default_rng(888 + iteration)
-        rng_iter.shuffle(null_assignments)
-        null_partitions = []
-        for fold in range(splits):
-            fold_graph = nx.Graph([edge for i, edge in enumerate(null_edges) if null_assignments[i] != fold])
-            comms = list(nx.community.louvain_communities(fold_graph, seed=iteration + fold + 1))
-            mapping = {node: group for group, comm in enumerate(comms) for node in comm}
-            null_partitions.append([mapping.get(node, -1) for node in null_nodes])
-        values = [
-            normalized_mutual_info_score(null_partitions[first], null_partitions[second])
-            for first, second in combinations(range(len(null_partitions)), 2)
-        ]
-        if values:
-            null_values.append(float(np.mean(values)))
-    null_mean = float(np.mean(null_values)) if null_values else np.nan
-    null_std = float(np.std(null_values)) if null_values else np.nan
-    p_value = float(np.mean(np.asarray(null_values) >= observed)) if null_values and not np.isnan(observed) else np.nan
-    z_score = (observed - null_mean) / null_std if null_values and null_std > 1e-12 else np.nan
-    summary = pd.DataFrame([
-        ("Validation network", network_type), ("Scope", scope_note),
-        ("Nodes validated", largest.number_of_nodes()), ("Edges validated", largest.number_of_edges()),
-        ("Density", nx.density(largest)),
-        ("Connected components in full graph", nx.number_connected_components(graph)),
-        ("Consensus communities", len(reference)), ("Cross-fold NMI", observed),
-        ("Null-model mean NMI", null_mean), ("Null-model SD", null_std),
-        ("Empirical p-value", p_value), ("Z-score", z_score),
-    ], columns=["Measure", "Value"])
-    null_table = pd.DataFrame({"Iteration": np.arange(1, len(null_values) + 1), "Null_NMI": null_values})
-    return {
-        "tables": {
-            "validation_summary": summary, "centrality_consistency_scores": consistency,
-            "consensus_communities": communities, "null_model_distribution": null_table,
-        },
-        "metadata": {"network_type": network_type, "scope": scope_note},
-        "communities": [sorted(community) for community in reference],
-        "warnings": [],
-    }
-
-
 def institutional_community_visualization(
-    institutional_result: dict, communities: list | None = None,
-    top_n_to_plot: int | None = None,
+    institutional_result: dict, top_n_to_plot: int | None = None,
 ) -> dict:
     """Generate the notebook's advanced Cividis community visualization on demand."""
     graph = institutional_result.get("full_graph")
@@ -513,13 +375,11 @@ def institutional_community_visualization(
     if ranking.empty or "Institution" not in ranking.columns:
         raise ValueError("The institutional ranking is unavailable.")
 
-    validated = bool(communities)
-    if not communities:
-        communities = [
-            sorted(community) for community in nx.community.louvain_communities(
-                graph, weight="weight", seed=42
-            ) if len(community) > 1
-        ]
+    communities = [
+        sorted(community) for community in nx.community.louvain_communities(
+            graph, weight="weight", seed=42
+        ) if len(community) > 1
+    ]
     communities = sorted([list(community) for community in communities if community], key=len, reverse=True)
     if not communities:
         raise ValueError("No non-singleton communities were detected in the selected network.")
@@ -607,9 +467,9 @@ def institutional_community_visualization(
             bbox=dict(facecolor="white", alpha=0.6, edgecolor="none", pad=0.1), ax=axis,
         )
 
-    source_label = "Validated Consensus Communities" if validated else "Louvain Communities"
+    source_label = "Louvain Communities"
     axis.set_title(
-        f"{network_type}_Consensus: {source_label} (Top {top_n_to_plot} Nodes) "
+        f"{network_type}: {source_label} (Top {top_n_to_plot} Nodes) "
         f"(Top {plotted.number_of_nodes()} Institutions)\n"
         f"{number_of_communities} communities identified in subgraph",
         fontsize=16, y=1.01, fontfamily="sans-serif",
@@ -664,7 +524,7 @@ def institutional_community_visualization(
         })
     summary = pd.DataFrame(summary_rows)
     safe_suffix = re.sub(r"[^\w\-]+", "_", source_label)
-    basename = f"community_plot_filtered_{network_type}_Consensus_{safe_suffix}"
+    basename = f"community_plot_filtered_{network_type}_{safe_suffix}"
     return {
         "figure": figure, "basename": basename, "communities": communities,
         "tables": {"community_membership": membership, "community_summary": summary},

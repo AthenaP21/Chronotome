@@ -15,7 +15,6 @@ from chronotome_core import (
     run_country_case_study, run_entity_resolution,
     run_final_topic_models, run_geographic_bibliometrics, run_ingestion,
     run_institutional_analysis, run_topic_institutional_analysis,
-    run_advanced_institutional_validation,
     run_institutional_community_visualization,
     run_all_workflow,
     run_thematic_preprocessing, run_topic_model_evaluation,
@@ -99,7 +98,6 @@ class ChronotomeSmokeTest(unittest.TestCase):
             patch("chronotome_core.runner.run_advanced_thematic_analysis", return_value=ordinary),
             patch("chronotome_core.runner.run_institutional_analysis", side_effect=institutional_side_effect) as run_inst,
             patch("chronotome_core.runner.run_institutional_community_visualization", side_effect=community_side_effect) as run_comm,
-            patch("chronotome_core.runner.run_advanced_institutional_validation") as forbidden_validation,
         ):
             result = run_all_workflow(
                 scopus_files=[object()], modes={"Scopus": "single", "WoS": "single"},
@@ -108,7 +106,6 @@ class ChronotomeSmokeTest(unittest.TestCase):
 
         self.assertEqual(run_inst.call_count, 6)
         self.assertEqual(run_comm.call_count, 6)
-        forbidden_validation.assert_not_called()
         community_stages = {
             key for key in result["stages"] if key.startswith(("31_", "32_", "33_", "34_", "35_", "36_"))
         }
@@ -121,8 +118,7 @@ class ChronotomeSmokeTest(unittest.TestCase):
         self.assertTrue(any(name.endswith(".xlsx") for name in names))
         self.assertTrue(any("/Plots/" in name for name in names))
         self.assertFalse(any(name.lower().endswith(".zip") for name in names))
-        validation_row = result["manifest"].iloc[-1]
-        self.assertEqual(validation_row["Status"], "Excluded by design")
+        self.assertFalse(result["manifest"]["Stage"].str.contains("validation", case=False).any())
 
     def test_institutional_six_scope_filters_and_exports(self):
         rows = [
@@ -160,14 +156,11 @@ class ChronotomeSmokeTest(unittest.TestCase):
         network_figure = global_result["figures"]["Collaboration_Network_Top_5_Global_All"]
         self.assertEqual(tuple(network_figure.get_size_inches()), (18.0, 16.0))
         self.assertEqual(global_result["metadata"]["network_edges"], 4)
-        validation = run_advanced_institutional_validation(global_result, null_iterations=2)
-        self.assertIn("centrality_consistency_scores", validation["tables"])
-        self.assertIn("chronotome_advanced_institutional_validation.zip", validation["exports"])
         communities = run_institutional_community_visualization(
-            global_result, validation_result=validation, top_n_to_plot=5,
+            global_result, top_n_to_plot=5,
         )
         self.assertEqual(tuple(communities["figure"].get_size_inches()), (22.0, 22.0))
-        self.assertEqual(communities["metadata"]["community_source"], "Validated Consensus Communities")
+        self.assertEqual(communities["metadata"]["community_source"], "Louvain Communities")
         self.assertIn("community_membership", communities["tables"])
         self.assertIn(f"Plots/{communities['basename']}.png", communities["exports"])
         self.assertIn(f"Plots/{communities['basename']}.svg", communities["exports"])

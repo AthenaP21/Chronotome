@@ -30,8 +30,7 @@ from .geographic_bibliometrics import (
 )
 from .io import combine_by_source, inspect_uploads, inspect_source_uploads, load_uploads
 from .institutional_bibliometrics import (
-    advanced_institutional_validation, institutional_analysis,
-    institutional_community_visualization,
+    institutional_analysis, institutional_community_visualization,
     prepare_institutional_dataset,
 )
 from .preprocessing import apply_time_filter, deduplicate, enrich_affiliations, harmonize
@@ -547,39 +546,12 @@ def run_topic_institutional_analysis(
     )
 
 
-def run_advanced_institutional_validation(
-    institutional_result: dict, n_splits=5, null_iterations=100, core_max_nodes=3500,
-):
-    result = advanced_institutional_validation(
-        institutional_result["full_graph"], institutional_result["tables"]["collaboration_counts"],
-        institutional_result["metadata"]["analysis_name"], n_splits=n_splits,
-        null_iterations=null_iterations, core_max_nodes=core_max_nodes,
-    )
-    files: dict[str, bytes] = {}
-    workbook = io.BytesIO()
-    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
-        for name, table in result["tables"].items():
-            files[f"Results/{name}_{result['metadata']['network_type']}.csv"] = dataframe_csv(table)
-            table.to_excel(writer, index=False, sheet_name=name[:31])
-    files[f"Results/Advanced_Network_Validation_{result['metadata']['network_type']}.xlsx"] = workbook.getvalue()
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files["chronotome_advanced_institutional_validation.zip"] = archive_buffer.getvalue()
-    return {**result, "exports": files}
-
-
 def run_institutional_community_visualization(
-    institutional_result: dict, validation_result: dict | None = None,
-    top_n_to_plot: int | None = None, include_archive=True,
+    institutional_result: dict, top_n_to_plot: int | None = None, include_archive=True,
 ):
     """Generate and export the selected network's advanced community figure."""
-    communities = None
-    if validation_result and validation_result.get("metadata", {}).get("network_type") == institutional_result.get("metadata", {}).get("analysis_name"):
-        communities = validation_result.get("communities")
     result = institutional_community_visualization(
-        institutional_result, communities=communities, top_n_to_plot=top_n_to_plot,
+        institutional_result, top_n_to_plot=top_n_to_plot,
     )
     basename = result["basename"]
     files: dict[str, bytes] = {
@@ -621,7 +593,6 @@ def _run_all_workflow_impl(
 ):
     """Run every modern Chronotome stage through community visualization.
 
-    Statistical institutional-network validation is intentionally excluded.
     Individual stage runners remain authoritative, so this convenience path
     cannot drift from the guided pages' analytical logic.
     """
@@ -850,11 +821,6 @@ def _run_all_workflow_impl(
             warnings.append(f"{community_label} skipped: {detail}")
             notify(community_label, "skipped", detail)
 
-    manifest_rows.append({
-        "Stage": "Advanced statistical institutional validation", "Status": "Excluded by design",
-        "Documents": "", "Warnings": 0,
-        "Detail": "The one-click workflow stops after community visualization, as requested.",
-    })
     if thematic_final is not None:
         del thematic_final
     del geographic
@@ -869,7 +835,6 @@ def _run_all_workflow_impl(
         (
             "Chronotome complete background workflow\n"
             "Includes ingestion through institutional community visualization.\n"
-            "Advanced statistical network validation is intentionally excluded.\n"
             "Each stage folder contains its Excel/CSV tables, publication-grade plots, and network files.\n"
         ).encode("utf-8"),
     )
