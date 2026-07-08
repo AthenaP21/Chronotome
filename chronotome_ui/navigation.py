@@ -12,7 +12,7 @@ def scroll_to_top(token: str | None = None) -> None:
     than local runs. The script therefore retries briefly and scrolls every
     plausible parent/document container instead of relying on one selector.
     """
-    key = f"chronotome-scroll-top-{token}" if token else None
+    _ = token  # Kept for call-site clarity; older Streamlit components.html has no key argument.
     components.html(
         """
         <script>
@@ -56,5 +56,4 @@ def scroll_to_top(token: str | None = None) -> None:
         """,
         height=1,
         width=0,
-        key=key,
     )
