@@ -6,6 +6,10 @@ import pandas as pd
 import io
 import zipfile
 import networkx as nx
+import gc
+import os
+import resource
+import sys
 from datetime import datetime
 
 from .analysis import (
@@ -14,7 +18,10 @@ from .analysis import (
     ranked_articles, source_metrics, team_size_impact, thematic_analysis,
 )
 from .advanced_analyses import run_advanced_bibliometric_analysis
-from .export import create_exports, dataframe_csv, dataframe_excel, figure_pdf, figure_png, figure_svg
+from .export import (
+    create_exports, dataframe_csv, dataframe_excel, figure_pdf, figure_png,
+    figure_svg, raster_export_policy, release_figures,
+)
 from .entity_resolution import resolve_entities
 from .descriptive_bibliometrics import run_descriptive_bibliometrics
 from .geographic_bibliometrics import (
@@ -34,6 +41,35 @@ from .thematic_bibliometrics import (
     thematic_preprocessing, topic_model_evaluation,
 )
 from .visualization import build_figures
+
+
+def _attach_archive(files: dict[str, bytes], archive_name: str, enabled=True) -> None:
+    """Attach a ZIP only for interactive single-stage downloads."""
+    if not enabled:
+        return
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    files[archive_name] = archive_buffer.getvalue()
+
+
+def _rss_megabytes() -> float:
+    """Return current RSS on Linux and a safe peak-RSS fallback elsewhere."""
+    try:
+        with open("/proc/self/statm", "r", encoding="ascii") as handle:
+            resident_pages = int(handle.read().split()[1])
+        return resident_pages * os.sysconf("SC_PAGE_SIZE") / (1024 ** 2)
+    except (OSError, ValueError, IndexError):
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return rss / (1024 ** 2) if sys.platform == "darwin" else rss / 1024
+
+
+def _release_result_figures(result: dict) -> None:
+    figures = list(result.get("figures", {}).values())
+    if result.get("figure") is not None:
+        figures.append(result["figure"])
+    release_figures(figures)
 
 
 def prisma_table(report: dict) -> pd.DataFrame:
@@ -87,7 +123,7 @@ Final records in dataset:           {report['final_total']:,}
 Sanity Check: {sanity}"""
 
 
-def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None):
+def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None, include_archive=True):
     """Verify, append, harmonize, deduplicate, and export bibliographic files.
 
     This is the focused Phase 1 runner used by the ingestion page. It keeps
@@ -150,11 +186,7 @@ def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None):
             safe = source.lower().replace(" ", "_")
             files[f"stitched_{safe}_export.csv"] = dataframe_csv(verification["combined"])
             files[f"stitched_{safe}_export.xlsx"] = dataframe_excel(verification["combined"], f"Stitched {source}")
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files["chronotome_ingestion_outputs.zip"] = archive_buffer.getvalue()
+    _attach_archive(files, "chronotome_ingestion_outputs.zip", include_archive)
     return {
         "processed_data": final, "merged_before_deduplication": merged,
         "duplicate_doi_records": duplicate_doi_records, "prisma": report,
@@ -165,7 +197,7 @@ def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None):
     }
 
 
-def run_entity_resolution(data: pd.DataFrame, alias_json_file=None):
+def run_entity_resolution(data: pd.DataFrame, alias_json_file=None, include_archive=True):
     """Resolve institution and country entities and create portable exports."""
     resolved = resolve_entities(data, alias_json_file=alias_json_file)
     files = {
@@ -191,17 +223,13 @@ def run_entity_resolution(data: pd.DataFrame, alias_json_file=None):
     ):
         if not table.empty:
             files[name] = dataframe_csv(table)
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files["chronotome_entity_resolution_outputs.zip"] = archive_buffer.getvalue()
+    _attach_archive(files, "chronotome_entity_resolution_outputs.zip", include_archive)
     return {**resolved, "exports": files}
 
 
 def run_corpus_bibliometrics(
     data: pd.DataFrame, cutoff_year=None, top_n=10, min_source_papers=5,
-    max_source_title_length=30,
+    max_source_title_length=30, include_archive=True,
 ):
     """Run notebook-faithful corpus, MNCS, typology, author, and trend analyses."""
     result = run_descriptive_bibliometrics(
@@ -226,11 +254,8 @@ def run_corpus_bibliometrics(
         files[f"Plots/{name}.png"] = figure_png(figure, dpi=600)
         files[f"Plots/{name}.svg"] = figure_svg(figure)
         files[f"Plots/{name}.pdf"] = figure_pdf(figure)
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files["chronotome_corpus_bibliometrics_outputs.zip"] = archive_buffer.getvalue()
+    _attach_archive(files, "chronotome_corpus_bibliometrics_outputs.zip", include_archive)
+    _release_result_figures(result)
     return {**result, "exports": files}
 
 
@@ -238,7 +263,7 @@ def run_geographic_bibliometrics(
     data: pd.DataFrame, collaboration_top_n=10, impact_top_n=15,
     min_papers=5, exclude_unknown=True, advanced_min_publications=5,
     citation_top_n=15, network_top_n=30, top_k_edges_per_node=5,
-    network_layout_iterations=250,
+    network_layout_iterations=250, include_archive=True,
 ):
     """Run notebook Sections 17–18 and create publication-grade in-memory exports."""
     result = geographic_distribution_analysis(
@@ -289,11 +314,8 @@ def run_geographic_bibliometrics(
         files[f"Plots/{name}.png"] = figure_png(figure, dpi=600)
         files[f"Plots/{name}.svg"] = figure_svg(figure)
         files[f"Plots/{name}.pdf"] = figure_pdf(figure)
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files["chronotome_geographic_distribution_outputs.zip"] = archive_buffer.getvalue()
+    _attach_archive(files, "chronotome_geographic_distribution_outputs.zip", include_archive)
+    _release_result_figures(result)
     return {**result, "exports": files}
 
 
@@ -327,16 +349,20 @@ def run_country_case_study(
         for name, content in files.items():
             archive.writestr(name, content)
     files[f"{safe_name}_Chronotome_Case_Study.zip"] = archive_buffer.getvalue()
+    _release_result_figures(result)
     return {**result, "exports": files}
 
 
-def run_advanced_analyses(data: pd.DataFrame, analyses=None):
+def run_advanced_analyses(data: pd.DataFrame, analyses=None, include_archive=True,
+                          include_dataset=True):
     """Run selected paper-ready advanced analyses and export only their artifacts."""
     result = run_advanced_bibliometric_analysis(data, analyses=analyses)
-    files: dict[str, bytes] = {
-        "Results/advanced_analysis_dataset.csv": dataframe_csv(result["data"]),
-        "Results/advanced_analysis_dataset.xlsx": dataframe_excel(result["data"], "Advanced dataset"),
-    }
+    files: dict[str, bytes] = {}
+    if include_dataset:
+        files.update({
+            "Results/advanced_analysis_dataset.csv": dataframe_csv(result["data"]),
+            "Results/advanced_analysis_dataset.xlsx": dataframe_excel(result["data"], "Advanced dataset"),
+        })
     for name, table in result["tables"].items():
         if isinstance(table, pd.DataFrame) and not table.empty:
             files[f"Results/{name}.csv"] = dataframe_csv(table)
@@ -350,18 +376,16 @@ def run_advanced_analyses(data: pd.DataFrame, analyses=None):
         files[f"Plots/{name}.png"] = figure_png(figure, dpi=600)
         files[f"Plots/{name}.svg"] = figure_svg(figure)
         files[f"Plots/{name}.pdf"] = figure_pdf(figure)
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files["chronotome_advanced_analyses_outputs.zip"] = archive_buffer.getvalue()
+    _attach_archive(files, "chronotome_advanced_analyses_outputs.zip", include_archive)
+    _release_result_figures(result)
     return {**result, "exports": files}
 
 
-def _thematic_exports(result: dict, archive_name: str, workbook_name: str) -> dict:
+def _thematic_exports(result: dict, archive_name: str, workbook_name: str,
+                      include_archive=True, include_dataset=True) -> dict:
     """Create consistent CSV/XLSX/SVG/PNG/PDF outputs for one thematic stage."""
     files: dict[str, bytes] = {}
-    if isinstance(result.get("data"), pd.DataFrame):
+    if include_dataset and isinstance(result.get("data"), pd.DataFrame):
         files["Results/thematic_analysis_dataset.csv"] = dataframe_csv(result["data"])
         files["Results/thematic_analysis_dataset.xlsx"] = dataframe_excel(result["data"], "Thematic dataset")
     workbook = io.BytesIO()
@@ -381,44 +405,51 @@ def _thematic_exports(result: dict, archive_name: str, workbook_name: str) -> di
         files[f"Plots/{name}.png"] = figure_png(figure, dpi=600)
         files[f"Plots/{name}.svg"] = figure_svg(figure)
         files[f"Plots/{name}.pdf"] = figure_pdf(figure)
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files[archive_name] = archive_buffer.getvalue()
+    _attach_archive(files, archive_name, include_archive)
+    _release_result_figures(result)
     return {**result, "exports": files}
 
 
 def run_thematic_preprocessing(data: pd.DataFrame, search_string: str, noise_lists: dict,
-                               blocklist: set[str], min_df=None, max_df=0.90):
+                               blocklist: set[str], min_df=None, max_df=0.90, include_archive=True,
+                               include_dataset=True):
     result = thematic_preprocessing(
         data, search_string, noise_lists, blocklist, min_df=min_df, max_df=max_df,
     )
-    return _thematic_exports(result, "chronotome_thematic_preprocessing_outputs.zip", "thematic_preprocessing_tables.xlsx")
+    return _thematic_exports(
+        result, "chronotome_thematic_preprocessing_outputs.zip", "thematic_preprocessing_tables.xlsx",
+        include_archive, include_dataset,
+    )
 
 
-def run_topic_model_evaluation(data: pd.DataFrame, k_values, min_df=2, max_df=0.95, max_iter=500):
+def run_topic_model_evaluation(data: pd.DataFrame, k_values, min_df=2, max_df=0.95, max_iter=500,
+                               include_archive=True, include_dataset=True):
     result = topic_model_evaluation(data, k_values, min_df=min_df, max_df=max_df, max_iter=max_iter)
-    return _thematic_exports(result, "chronotome_topic_evaluation_outputs.zip", "topic_evaluation_tables.xlsx")
+    return _thematic_exports(
+        result, "chronotome_topic_evaluation_outputs.zip", "topic_evaluation_tables.xlsx",
+        include_archive, include_dataset,
+    )
 
 
 def run_final_topic_models(data: pd.DataFrame, lda_k: int, nmf_k: int, bin_duration=5,
-                           top_words=15, min_df=2, max_df=0.95):
+                           top_words=15, min_df=2, max_df=0.95, include_archive=True):
     result = final_topic_models(
         data, lda_k, nmf_k, bin_duration=bin_duration, top_words=top_words,
         min_df=min_df, max_df=max_df,
     )
-    return _thematic_exports(result, "chronotome_final_topic_models_outputs.zip", "final_topic_model_tables.xlsx")
+    return _thematic_exports(result, "chronotome_final_topic_models_outputs.zip", "final_topic_model_tables.xlsx", include_archive)
 
 
 def run_advanced_thematic_analysis(data: pd.DataFrame, cooccurrence_threshold=0.1,
-                                   min_country_documents=10, top_countries=20):
+                                   min_country_documents=10, top_countries=20, include_archive=True,
+                                   include_dataset=True):
     result = advanced_thematic_analysis(
         data, cooccurrence_threshold=cooccurrence_threshold,
         min_country_documents=min_country_documents, top_countries=top_countries,
     )
     return _thematic_exports(
-        result, "chronotome_advanced_thematic_outputs.zip", "advanced_thematic_tables.xlsx"
+        result, "chronotome_advanced_thematic_outputs.zip", "advanced_thematic_tables.xlsx",
+        include_archive, include_dataset,
     )
 
 
@@ -432,15 +463,12 @@ def _graphml_bytes(graph) -> bytes:
     return "\n".join(nx.generate_graphml(graph)).encode("utf-8")
 
 
-def _institutional_exports(result: dict, archive_name: str) -> dict:
+def _institutional_exports(result: dict, archive_name: str, include_archive=True,
+                           include_dataset=True) -> dict:
     """Create notebook filenames plus CSV/XLSX/GraphML and vector figure formats."""
     analysis_name = result["metadata"]["analysis_name"]
     top_n_plot = result["config"]["top_n_plot"]
     files: dict[str, bytes] = {
-        "Results/article_summary_with_country_classification.csv": dataframe_csv(result["prepared_data"]),
-        "Results/article_summary_with_country_classification.xlsx": dataframe_excel(
-            result["prepared_data"], "Geographic handoff"
-        ),
         f"Results/Top_Institutions_By_Publications_{analysis_name}.csv": dataframe_csv(
             result["tables"]["institution_ranking"]
         ),
@@ -457,6 +485,13 @@ def _institutional_exports(result: dict, archive_name: str) -> dict:
             result["tables"]["analysis_summary"], "Analysis summary"
         ),
     }
+    if include_dataset:
+        files.update({
+            "Results/article_summary_with_country_classification.csv": dataframe_csv(result["prepared_data"]),
+            "Results/article_summary_with_country_classification.xlsx": dataframe_excel(
+                result["prepared_data"], "Geographic handoff"
+            ),
+        })
     workbook = io.BytesIO()
     with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
         for name, table in result["tables"].items():
@@ -469,29 +504,30 @@ def _institutional_exports(result: dict, archive_name: str) -> dict:
         files[f"Plots/{name}.png"] = figure_png(figure, dpi=600)
         files[f"Plots/{name}.svg"] = figure_svg(figure)
         files[f"Plots/{name}.pdf"] = figure_pdf(figure)
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files[archive_name] = archive_buffer.getvalue()
+    _attach_archive(files, archive_name, include_archive)
+    _release_result_figures(result)
     return {**result, "exports": files}
 
 
 def run_institutional_analysis(
     data: pd.DataFrame, analysis_name="Global_All", top_n_list=1000,
-    top_n_plot=30, max_institutions_per_paper=50,
+    top_n_plot=30, max_institutions_per_paper=50, include_archive=True,
+    include_dataset=True,
 ):
     result = institutional_analysis(
         data, analysis_name=analysis_name, top_n_list=top_n_list,
         top_n_plot=top_n_plot,
         max_institutions_per_paper=max_institutions_per_paper,
     )
-    return _institutional_exports(result, f"chronotome_institutional_{analysis_name}_outputs.zip")
+    return _institutional_exports(
+        result, f"chronotome_institutional_{analysis_name}_outputs.zip",
+        include_archive, include_dataset,
+    )
 
 
 def run_topic_institutional_analysis(
     data: pd.DataFrame, topic, top_n_list=1000, top_n_plot=25,
-    max_institutions_per_paper=50,
+    max_institutions_per_paper=50, include_archive=True, include_dataset=True,
 ):
     if "Dominant_Topic" not in data.columns:
         raise ValueError("Run the final LDA topic model before topic-level institutional analysis.")
@@ -505,7 +541,10 @@ def run_topic_institutional_analysis(
         max_institutions_per_paper=max_institutions_per_paper,
     )
     result["metadata"]["topic"] = topic
-    return _institutional_exports(result, f"chronotome_institutional_Topic_{safe_topic}_outputs.zip")
+    return _institutional_exports(
+        result, f"chronotome_institutional_Topic_{safe_topic}_outputs.zip",
+        include_archive, include_dataset,
+    )
 
 
 def run_advanced_institutional_validation(
@@ -533,7 +572,7 @@ def run_advanced_institutional_validation(
 
 def run_institutional_community_visualization(
     institutional_result: dict, validation_result: dict | None = None,
-    top_n_to_plot: int | None = None,
+    top_n_to_plot: int | None = None, include_archive=True,
 ):
     """Generate and export the selected network's advanced community figure."""
     communities = None
@@ -554,15 +593,29 @@ def run_institutional_community_visualization(
             files[f"Results/{name}_{result['metadata']['network_type']}.csv"] = dataframe_csv(table)
             table.to_excel(writer, index=False, sheet_name=name[:31])
     files[f"Results/Institutional_Communities_{result['metadata']['network_type']}.xlsx"] = workbook.getvalue()
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, content in files.items():
-            archive.writestr(name, content)
-    files[f"chronotome_institutional_communities_{result['metadata']['network_type']}.zip"] = archive_buffer.getvalue()
+    _attach_archive(
+        files,
+        f"chronotome_institutional_communities_{result['metadata']['network_type']}.zip",
+        include_archive,
+    )
+    _release_result_figures(result)
     return {**result, "exports": files}
 
 
 def run_all_workflow(
+    scopus_files=None, wos_files=None, modes=None, config=None,
+    ingestion_result: dict | None = None, progress_callback=None,
+):
+    """Run the complete workflow under a bounded-memory raster policy."""
+    with raster_export_policy(max_dpi=300, max_side_px=4800):
+        return _run_all_workflow_impl(
+            scopus_files=scopus_files, wos_files=wos_files, modes=modes,
+            config=config, ingestion_result=ingestion_result,
+            progress_callback=progress_callback,
+        )
+
+
+def _run_all_workflow_impl(
     scopus_files=None, wos_files=None, modes=None, config=None,
     ingestion_result: dict | None = None, progress_callback=None,
 ):
@@ -583,17 +636,19 @@ def run_all_workflow(
         "community_top_n_global": 50, "community_top_n_eu": 30,
         **(config or {}),
     }
-    stages: dict[str, dict] = {}
+    stage_summaries: dict[str, dict] = {}
     manifest_rows: list[dict] = []
     warnings: list[str] = []
+    archive_buffer = io.BytesIO()
+    archive = zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED)
+    included_files = 0
 
     def notify(stage: str, state: str, detail: str = ""):
         if progress_callback is not None:
             progress_callback(stage, state, detail)
 
     def record(stage_key: str, label: str, result: dict | None, status="Complete", detail=""):
-        if result is not None:
-            stages[stage_key] = result
+        nonlocal included_files
         stage_warnings = result.get("warnings", []) if result else []
         warnings.extend(stage_warnings)
         documents = ""
@@ -602,55 +657,94 @@ def run_all_workflow(
                 if isinstance(result.get(data_key), pd.DataFrame):
                     documents = len(result[data_key])
                     break
+        if result is not None:
+            for path, content in result.get("exports", {}).items():
+                if path.lower().endswith(".zip"):
+                    continue
+                archive.writestr(f"{stage_key}/{path.lstrip('/')}", content)
+                included_files += 1
+            figures = list(result.get("figures", {}).values())
+            if result.get("figure") is not None:
+                figures.append(result["figure"])
+            release_figures(figures)
+            # The master archive now owns serialized artifacts. Keeping each
+            # stage's bytes and plot objects would multiply session memory.
+            result.pop("exports", None)
+            result.pop("figures", None)
+            result.pop("figure", None)
+        rss = round(_rss_megabytes(), 1)
+        stage_summaries[stage_key] = {
+            "label": label, "status": status, "documents": documents,
+            "warnings": len(stage_warnings), "rss_mb": rss,
+        }
         manifest_rows.append({
             "Stage": label, "Status": status, "Documents": documents,
-            "Warnings": len(stage_warnings), "Detail": detail,
+            "Warnings": len(stage_warnings), "RSS after stage (MB)": rss,
+            "Detail": detail,
         })
+        gc.collect()
 
     notify("Data ingestion", "running")
     if ingestion_result is None:
-        ingestion_result = run_ingestion(
+        ingestion = run_ingestion(
             scopus_files=scopus_files, wos_files=wos_files, modes=modes,
             config={
                 "enable_time_filter": bool(config["enable_time_filter"]),
                 "collection_year": config["collection_year"],
             },
+            include_archive=False,
         )
-    record("01_ingestion", "Data ingestion", ingestion_result)
-    notify("Data ingestion", "complete", f"{len(ingestion_result['processed_data']):,} records")
+    else:
+        # Never mutate a guided-page result supplied from session state.
+        ingestion = {**ingestion_result, "exports": dict(ingestion_result.get("exports", {}))}
+    record("01_ingestion", "Data ingestion", ingestion)
+    notify("Data ingestion", "complete", f"{len(ingestion['processed_data']):,} records")
 
     notify("Entity resolution", "running")
-    entity = run_entity_resolution(ingestion_result["processed_data"])
+    entity = run_entity_resolution(ingestion["processed_data"], include_archive=False)
     record("02_entity_resolution", "Entity resolution", entity)
     notify("Entity resolution", "complete", f"{len(entity['article_summary']):,} articles")
+    del ingestion
+    gc.collect()
 
     notify("Corpus and production", "running")
     corpus = run_corpus_bibliometrics(
         entity["article_summary"], cutoff_year=config["collection_year"],
         top_n=int(config["top_n"]), min_source_papers=int(config["min_source_papers"]),
+        include_archive=False,
     )
     record("03_corpus_and_production", "Corpus and production", corpus)
     notify("Corpus and production", "complete")
+    del entity
+    gc.collect()
 
     notify("Geographic analysis", "running")
     geographic = run_geographic_bibliometrics(
         corpus["data"], min_papers=int(config["country_min_papers"]),
         advanced_min_publications=int(config["country_min_papers"]),
+        include_archive=False,
     )
     record("04_geographic_analysis", "Geographic analysis", geographic)
     notify("Geographic analysis", "complete")
+    del corpus
+    gc.collect()
 
     notify("Advanced evaluative analyses", "running")
-    advanced = run_advanced_analyses(geographic["data"])
+    advanced = run_advanced_analyses(
+        geographic["data"], include_archive=False, include_dataset=False
+    )
     record("05_advanced_evaluative", "Advanced evaluative analyses", advanced)
     notify("Advanced evaluative analyses", "complete")
+    del advanced
+    gc.collect()
 
     thematic_final = None
     notify("Thematic preprocessing", "running")
     try:
         thematic_preprocessed = run_thematic_preprocessing(
             geographic["data"], "", DEFAULT_NOISE_LISTS, DEFAULT_BLOCKLIST_PHRASES,
-            min_df=config["thematic_min_df"],
+            min_df=config["thematic_min_df"], include_archive=False,
+            include_dataset=False,
         )
         record("06_thematic_preprocessing", "Thematic preprocessing", thematic_preprocessed)
         notify("Thematic preprocessing", "complete")
@@ -658,7 +752,7 @@ def run_all_workflow(
         notify("Automatic topic evaluation", "running")
         topic_evaluation = run_topic_model_evaluation(
             thematic_preprocessed["data"], config["topic_k_values"],
-            min_df=int(config["topic_model_min_df"]),
+            min_df=int(config["topic_model_min_df"]), include_archive=False,
         )
         record("07_topic_evaluation", "Automatic topic evaluation", topic_evaluation)
         notify(
@@ -672,14 +766,21 @@ def run_all_workflow(
             topic_evaluation["best_nmf_k"],
             bin_duration=int(config["topic_bin_duration"]),
             min_df=int(config["topic_model_min_df"]),
+            include_archive=False,
         )
         record("08_final_topic_models", "Final LDA/NMF topic models", thematic_final)
         notify("Final topic models", "complete")
+        del thematic_preprocessed, topic_evaluation
+        gc.collect()
 
         notify("Advanced thematic analyses", "running")
-        thematic_advanced = run_advanced_thematic_analysis(thematic_final["data"])
+        thematic_advanced = run_advanced_thematic_analysis(
+            thematic_final["data"], include_archive=False, include_dataset=False
+        )
         record("09_advanced_thematic", "Advanced thematic analyses", thematic_advanced)
         notify("Advanced thematic analyses", "complete")
+        del thematic_advanced
+        gc.collect()
     except Exception as exc:
         detail = f"Thematic branch skipped after an analysis constraint: {exc}"
         warnings.append(detail)
@@ -696,18 +797,19 @@ def run_all_workflow(
                     thematic_final["data"], topic,
                     top_n_plot=min(25, int(config["institutional_top_n_plot"])),
                     max_institutions_per_paper=int(config["max_institutions_per_paper"]),
+                    include_archive=False, include_dataset=False,
                 )
                 safe_topic = str(topic).replace(".", "_")
                 record(f"10_topic_{safe_topic}_institutions", label, topic_result)
                 notify(label, "complete")
+                del topic_result
+                gc.collect()
             except Exception as exc:
                 detail = str(exc)
                 record(f"10_topic_{topic}_status", label, None, status="Skipped", detail=detail)
                 warnings.append(f"{label} skipped: {detail}")
                 notify(label, "skipped", detail)
 
-    institutional_results: dict[str, dict] = {}
-    community_results: dict[str, dict] = {}
     analysis_names = ("Global_All", "Global_MCP", "Global_SCP", "EU_All", "EU_MCP", "EU_SCP")
     for index, analysis_name in enumerate(analysis_names, 1):
         label = f"Institutional analysis: {analysis_name}"
@@ -717,8 +819,8 @@ def run_all_workflow(
                 geographic["data"], analysis_name=analysis_name,
                 top_n_plot=int(config["institutional_top_n_plot"]),
                 max_institutions_per_paper=int(config["max_institutions_per_paper"]),
+                include_archive=False, include_dataset=False,
             )
-            institutional_results[analysis_name] = institutional
             record(f"{20 + index:02d}_institutional_{analysis_name}", label, institutional)
             notify(label, "complete")
         except Exception as exc:
@@ -736,11 +838,12 @@ def run_all_workflow(
                 if analysis_name.startswith("Global") else int(config["community_top_n_eu"])
             )
             community = run_institutional_community_visualization(
-                institutional, top_n_to_plot=top_n,
+                institutional, top_n_to_plot=top_n, include_archive=False,
             )
-            community_results[analysis_name] = community
             record(f"{30 + index:02d}_communities_{analysis_name}", community_label, community)
             notify(community_label, "complete")
+            del community, institutional
+            gc.collect()
         except Exception as exc:
             detail = str(exc)
             record(f"{30 + index:02d}_communities_{analysis_name}", community_label, None, status="Skipped", detail=detail)
@@ -752,43 +855,38 @@ def run_all_workflow(
         "Documents": "", "Warnings": 0,
         "Detail": "The one-click workflow stops after community visualization, as requested.",
     })
-    manifest = pd.DataFrame(manifest_rows)
+    if thematic_final is not None:
+        del thematic_final
+    del geographic
+    gc.collect()
 
-    archive_buffer = io.BytesIO()
-    included_files = 0
-    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("00_Workflow_Summary/full_workflow_manifest.xlsx", dataframe_excel(manifest, "Workflow manifest"))
-        archive.writestr("00_Workflow_Summary/full_workflow_manifest.csv", dataframe_csv(manifest))
-        archive.writestr(
-            "00_Workflow_Summary/README.txt",
-            (
-                "Chronotome complete background workflow\n"
-                "Includes ingestion through institutional community visualization.\n"
-                "Advanced statistical network validation is intentionally excluded.\n"
-                "Each stage folder contains its Excel/CSV tables, publication-grade plots, and network files.\n"
-            ).encode("utf-8"),
-        )
-        for stage_key, stage_result in stages.items():
-            for path, content in stage_result.get("exports", {}).items():
-                if path.lower().endswith(".zip"):
-                    continue
-                safe_path = path.lstrip("/")
-                archive.writestr(f"{stage_key}/{safe_path}", content)
-                included_files += 1
+    manifest = pd.DataFrame(manifest_rows)
+    manifest_excel = dataframe_excel(manifest, "Workflow manifest")
+    archive.writestr("00_Workflow_Summary/full_workflow_manifest.xlsx", manifest_excel)
+    archive.writestr("00_Workflow_Summary/full_workflow_manifest.csv", dataframe_csv(manifest))
+    archive.writestr(
+        "00_Workflow_Summary/README.txt",
+        (
+            "Chronotome complete background workflow\n"
+            "Includes ingestion through institutional community visualization.\n"
+            "Advanced statistical network validation is intentionally excluded.\n"
+            "Each stage folder contains its Excel/CSV tables, publication-grade plots, and network files.\n"
+        ).encode("utf-8"),
+    )
+    archive.close()
     exports = {
         "chronotome_complete_background_workflow.zip": archive_buffer.getvalue(),
-        "full_workflow_manifest.xlsx": dataframe_excel(manifest, "Workflow manifest"),
+        "full_workflow_manifest.xlsx": manifest_excel,
     }
     notify("Complete workflow", "complete", f"{included_files:,} files packaged")
     return {
-        "stages": stages, "manifest": manifest,
-        "ingestion": ingestion_result, "entity_resolution": entity,
-        "corpus": corpus, "geographic": geographic, "advanced": advanced,
-        "thematic_final": thematic_final,
-        "institutional_results": institutional_results,
-        "community_results": community_results,
+        "stages": stage_summaries, "manifest": manifest,
         "warnings": list(dict.fromkeys(warnings)), "exports": exports,
-        "metadata": {"packaged_files": included_files, "documents": len(geographic["data"])},
+        "metadata": {
+            "packaged_files": included_files,
+            "documents": int(manifest.loc[manifest["Stage"] == "Geographic analysis", "Documents"].iloc[0]),
+            "final_rss_mb": round(_rss_megabytes(), 1),
+        },
         "config": config,
     }
 
@@ -866,6 +964,7 @@ def run_chronotome(uploaded_file, config=None):
         warnings.extend(thematic_warnings)
     figures = build_figures(tables, networks, config)
     exports = create_exports(processed, tables, figures)
+    release_figures(figures.values())
     return {
         "processed_data": processed,
         "tables": tables,

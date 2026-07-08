@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from chronotome_core import run_entity_resolution
+from chronotome_ui.state import clear_downstream_state
 from chronotome_core.entity_resolution import validate_institution_alias_json
 
 
@@ -140,6 +141,7 @@ def render_entity_resolution():
         try:
             with st.spinner("Exploding affiliations and resolving institutions and countries…"):
                 result = run_entity_resolution(dataset, alias_json_file=alias_upload)
+                clear_downstream_state("entity")
                 st.session_state["entity_resolution_results"] = result
                 st.session_state["entity_resolution_signature"] = current_signature
             st.success("Institutional and geographic entity resolution complete.")

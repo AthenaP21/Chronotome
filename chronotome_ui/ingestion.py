@@ -10,6 +10,7 @@ import streamlit as st
 from chronotome_core import run_ingestion
 from chronotome_core.export import dataframe_csv
 from chronotome_core.io import InputError, inspect_source_uploads
+from chronotome_ui.state import clear_downstream_state
 
 
 def _as_list(uploaded):
@@ -235,12 +236,14 @@ When enabled, Chronotome keeps only records where `Publication Year < cutoff yea
     if st.button("Harmonize and deduplicate", type="primary", disabled=not verified_current):
         try:
             with st.spinner("Harmonizing schemas, fusing duplicates, and preparing PRISMA…"):
-                st.session_state["ingestion_results"] = run_ingestion(
+                new_result = run_ingestion(
                     scopus_files=scopus_files, wos_files=wos_files, modes=modes,
                     config={"enable_time_filter": enable_time_filter,
                             "collection_year": (int(collection_year) if enable_time_filter and
                                                 cutoff_source == "Manual collection year" else None)},
                 )
+                clear_downstream_state("ingestion")
+                st.session_state["ingestion_results"] = new_result
                 st.session_state["ingestion_result_signature"] = processing_signature
             st.success("Harmonization and deduplication complete.")
         except (InputError, ValueError, KeyError) as exc:

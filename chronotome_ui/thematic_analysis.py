@@ -18,6 +18,7 @@ from chronotome_core.thematic_bibliometrics import (
     install_nltk_resources, thematic_resource_status,
 )
 from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.state import clear_downstream_state
 
 
 def _section(number: int, title: str, caption: str | None = None):
@@ -205,6 +206,7 @@ def render_thematic_analysis():
                     data, search_string if remove_search_terms else "", noise_lists, blocklist,
                     min_df=None if automatic_min_df else int(manual_min_df), max_df=float(ngram_max_df),
                 )
+                clear_downstream_state("thematic")
                 st.session_state["thematic_preprocessing_results"] = result
                 st.session_state["thematic_preprocessing_signature"] = settings_signature
                 st.session_state.pop("topic_evaluation_results", None)
@@ -329,7 +331,9 @@ def render_thematic_analysis():
                 advanced = run_advanced_thematic_analysis(
                     final["data"], cooccurrence_threshold=float(cooccurrence_threshold),
                     min_country_documents=int(min_country_documents), top_countries=int(top_countries),
+                    include_dataset=False,
                 )
+                advanced.pop("data", None)
                 st.session_state["advanced_thematic_results"] = advanced
                 st.session_state["advanced_thematic_signature"] = advanced_signature
             st.success("Advanced thematic analyses complete.")

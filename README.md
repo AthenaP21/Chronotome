@@ -22,6 +22,7 @@ No notebook interface or local data paths are required. All uploaded and generat
 - **Thematic analysis** uses the current geographic dataset or prepares one uploaded Chronotome dataset in the background. It provides staged NLTK setup, optional query-term removal, visible editable noise-list categories, 1–4 gram extraction and word clouds, automatic LDA/NMF topic selection, longitudinal topic evolution, topic impact/co-occurrence, canonical papers, and country specialization.
 - **Institutional analysis** uses the current geographic dataset or the unchanged `article_summary_with_country_classification` handoff file. A six-option dropdown generates one Global/EU × All/MCP/SCP network at a time, with publication rankings, collaboration maps, on-demand Cividis community visualizations, GraphML/CSV/Excel exports, optional topic-specific networks, and a separate opt-in statistical-validation view.
 - **Full workflow** provides a single **Run all workflow** action. It starts from raw Scopus/WoS files or the current ingestion result, executes every modern stage through all six institutional community visualizations, and returns one structured ZIP containing the workflow's Excel files, plots, network exports, and manifest. Advanced statistical network validation remains excluded and opt-in.
+  The background runner streams stage artifacts directly into the master archive, releases completed figures and graphs, avoids nested ZIP/dataset duplication, and records process-memory usage after every stage.
 
 ## Input files
 
@@ -107,4 +108,6 @@ results = run_chronotome(uploaded_files, config)
 
 Large exports and dense networks can approach Community Cloud memory/time limits. For those datasets, disable thematic analysis or reduce the number of institutions displayed in network plots.
 
-Analytical figure downloads preserve the notebook styling and filenames. Each figure is exported as a 600-DPI PNG plus vector SVG and PDF, while tables are available as individual CSV files and a combined Excel workbook inside a ZIP organized into `Plots/` and `Results/` folders.
+Analytical figure downloads preserve the notebook styling and filenames. Standard figures are exported as 600-DPI PNG plus vector SVG and PDF; oversized network rasters are safely bounded while SVG/PDF remain resolution-independent. Tables are available as individual CSV files and combined Excel workbooks inside ZIP folders organized into `Plots/` and `Results/`.
+
+For memory safety, oversized raster figures use an adaptive pixel ceiling while retaining their original aspect ratio and layout. Full-resolution SVG and PDF remain the publication masters. The one-click background workflow uses a stricter raster budget, streams outputs stage by stage, and keeps only its final archive and manifest in session memory.

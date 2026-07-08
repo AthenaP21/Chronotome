@@ -58,7 +58,10 @@ def _component_result(key: str, label: str, data: pd.DataFrame, results: dict):
     if st.button(button_label, type="primary", key=f"generate-advanced-{key}"):
         try:
             with st.spinner(f"Generating {label}…"):
-                results[key] = run_advanced_analyses(data, analyses=[key])
+                results[key] = run_advanced_analyses(
+                    data, analyses=[key], include_dataset=False
+                )
+                results[key].pop("data", None)
             st.success(f"{label.capitalize()} complete.")
         except (ValueError, KeyError) as exc:
             st.error(f"{label.capitalize()} could not run: {exc}")

@@ -258,6 +258,9 @@ def render_institutional_analysis():
                     max_institutions_per_paper=int(max_institutions),
                 )
             cache[analysis_name] = {"signature": signature, "result": result}
+            for cached_name in list(cache):
+                if cached_name != analysis_name:
+                    cache.pop(cached_name, None)
             current = True
         except (ValueError, KeyError) as exc:
             st.error(f"Institutional analysis could not run: {exc}")
@@ -332,6 +335,9 @@ def render_institutional_analysis():
                 "validated": validation_matches,
                 "result": community_result,
             }
+            for cached_name in list(community_cache):
+                if cached_name != analysis_name:
+                    community_cache.pop(cached_name, None)
             cached_community = community_cache[analysis_name]
         except (ValueError, KeyError) as exc:
             st.error(f"Communities could not be generated: {exc}")
@@ -417,6 +423,9 @@ def render_institutional_analysis():
                         topic_data, selected_topic, top_n_plot=25,
                         max_institutions_per_paper=int(max_institutions),
                     )
+                    for cached_topic in list(topic_cache):
+                        if cached_topic != topic_key:
+                            topic_cache.pop(cached_topic, None)
             except (ValueError, KeyError) as exc:
                 st.error(f"Topic network could not run: {exc}")
             except Exception as exc:

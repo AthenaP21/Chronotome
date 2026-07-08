@@ -9,6 +9,7 @@ import streamlit as st
 
 from chronotome_core import run_corpus_bibliometrics
 from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.state import clear_downstream_state
 
 
 def _select_dataset():
@@ -148,6 +149,7 @@ Grid alpha: 0.3""",
                     min_source_papers=int(min_source_papers),
                     max_source_title_length=int(max_source_title_length),
                 )
+                clear_downstream_state("corpus")
                 st.session_state["corpus_bibliometrics_results"] = result
                 st.session_state["corpus_bibliometrics_signature"] = analysis_signature
                 results = result
