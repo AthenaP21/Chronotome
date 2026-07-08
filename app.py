@@ -31,8 +31,11 @@ with st.sidebar:
     )
     st.caption("Scopus + Web of Science · No OpenAlex integration")
 
-if st.session_state.pop("_chronotome_scroll_top", False) or st.session_state.get("_chronotome_last_page") != page:
-    scroll_to_top()
+should_scroll_top = (
+    st.session_state.pop("_chronotome_scroll_top", False)
+    or st.session_state.get("_chronotome_last_page") != page
+)
+if should_scroll_top:
     st.session_state["_chronotome_last_page"] = page
 
 if page == "Home":
@@ -53,3 +56,6 @@ elif page == "Institutional analysis":
     render_institutional_analysis()
 else:
     render_full_workflow()
+
+if should_scroll_top:
+    scroll_to_top(token=page)
