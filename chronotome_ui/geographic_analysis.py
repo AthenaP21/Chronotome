@@ -7,6 +7,7 @@ import streamlit as st
 
 from chronotome_core import run_country_case_study, run_geographic_bibliometrics
 from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.state import clear_downstream_state
 
 
 def _select_dataset():
@@ -325,6 +326,7 @@ def render_geographic_analysis():
                     top_k_edges_per_node=int(top_k_edges),
                     network_layout_iterations=int(network_iterations),
                 )
+                clear_downstream_state("geographic")
                 st.session_state["geographic_analysis_results"] = result
                 st.session_state["geographic_analysis_signature"] = analysis_signature
                 results = result

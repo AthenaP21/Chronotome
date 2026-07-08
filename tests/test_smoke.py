@@ -21,6 +21,7 @@ from chronotome_core import (
     run_thematic_preprocessing, run_topic_model_evaluation,
 )
 from chronotome_core.entity_resolution import validate_institution_alias_json
+from chronotome_core.export import dataframe_csv, effective_png_dpi
 from chronotome_core.io import InputError, inspect_source_uploads
 from chronotome_core.preprocessing import (
     clean_scopus_authors, clean_wos_authors, remove_id_codes_from_full_names,
@@ -41,6 +42,20 @@ class JsonUpload(io.BytesIO):
 
 
 class ChronotomeSmokeTest(unittest.TestCase):
+    def test_adaptive_png_budget_and_non_mutating_table_export(self):
+        normal = plt.figure(figsize=(10, 6))
+        large = plt.figure(figsize=(22, 22))
+        self.assertEqual(effective_png_dpi(normal, 600), 600)
+        self.assertLess(effective_png_dpi(large, 600), 600)
+        self.assertLessEqual(22 * effective_png_dpi(large, 600), 7200)
+        frame = pd.DataFrame({"Values": [["A", "B"], ["C"]], "Count": [1, 2]})
+        original = frame.iloc[0, 0]
+        exported = dataframe_csv(frame)
+        self.assertIn(b"Values", exported)
+        self.assertIs(frame.iloc[0, 0], original)
+        self.assertEqual(frame.iloc[0, 0], ["A", "B"])
+        plt.close(normal); plt.close(large)
+
     def test_full_background_workflow_packages_all_stages_without_validation(self):
         frame = pd.DataFrame({
             "Title": ["Paper A", "Paper B"],
@@ -94,9 +109,13 @@ class ChronotomeSmokeTest(unittest.TestCase):
         self.assertEqual(run_inst.call_count, 6)
         self.assertEqual(run_comm.call_count, 6)
         forbidden_validation.assert_not_called()
-        self.assertEqual(set(result["community_results"]), {
-            "Global_All", "Global_MCP", "Global_SCP", "EU_All", "EU_MCP", "EU_SCP",
-        })
+        community_stages = {
+            key for key in result["stages"] if key.startswith(("31_", "32_", "33_", "34_", "35_", "36_"))
+        }
+        self.assertEqual(len(community_stages), 6)
+        self.assertNotIn("geographic", result)
+        self.assertNotIn("thematic_final", result)
+        self.assertIn("final_rss_mb", result["metadata"])
         archive = zipfile.ZipFile(io.BytesIO(result["exports"]["chronotome_complete_background_workflow.zip"]))
         names = archive.namelist()
         self.assertTrue(any(name.endswith(".xlsx") for name in names))

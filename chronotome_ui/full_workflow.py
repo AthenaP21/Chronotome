@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import gc
 from datetime import datetime
 
 import streamlit as st
@@ -147,6 +148,10 @@ def render_full_workflow():
     )
     if st.button("Run all workflow", type="primary", disabled=not can_run, key="run-all-workflow"):
         try:
+            # Do not keep a previous master archive resident while creating its replacement.
+            st.session_state.pop("full_workflow_results", None)
+            st.session_state.pop("full_workflow_signature", None)
+            gc.collect()
             with st.status("Running the complete Chronotome workflow…", expanded=True) as status:
                 def progress(stage, state, detail=""):
                     symbol = {"running": "⏳", "complete": "✅", "skipped": "⚠️"}.get(state, "•")
@@ -163,14 +168,6 @@ def render_full_workflow():
                 status.update(label="Complete Chronotome workflow finished.", state="complete", expanded=False)
             st.session_state["full_workflow_results"] = result
             st.session_state["full_workflow_signature"] = workflow_signature
-
-            # Make completed handoffs immediately reusable by the guided pages.
-            st.session_state["ingestion_results"] = result["ingestion"]
-            st.session_state["entity_resolution_results"] = result["entity_resolution"]
-            st.session_state["corpus_bibliometrics_results"] = result["corpus"]
-            st.session_state["geographic_analysis_results"] = result["geographic"]
-            if result["thematic_final"] is not None:
-                st.session_state["final_topic_model_results"] = result["thematic_final"]
             st.success("Every available stage has been packaged into one download.")
         except (ValueError, KeyError) as exc:
             st.error(f"The complete workflow could not run: {exc}")
@@ -185,11 +182,12 @@ def render_full_workflow():
         return
 
     _section(4, "Workflow completion report")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Final documents", f"{results['metadata']['documents']:,}")
     c2.metric("Packaged files", f"{results['metadata']['packaged_files']:,}")
     completed = int((results["manifest"]["Status"] == "Complete").sum())
     c3.metric("Completed stages", f"{completed:,}")
+    c4.metric("Final process memory", f"{results['metadata']['final_rss_mb']:,.0f} MB")
     st.dataframe(results["manifest"], width="stretch", hide_index=True)
     if results["warnings"]:
         with st.expander(f"Workflow warnings ({len(results['warnings'])})"):
