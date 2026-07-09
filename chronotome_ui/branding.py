@@ -20,7 +20,10 @@ BRAND = {
 }
 
 def logo_path() -> Path:
-    """Return the preferred logo path inside the repository."""
+    """Return the bundled logo, with repository paths retained for development."""
+    packaged = Path(__file__).with_name("chronotome-logo.png")
+    if packaged.exists():
+        return packaged
     root = Path(__file__).resolve().parents[1]
     preferred = root / "assets" / "chronotome-logo.png"
     if preferred.exists():

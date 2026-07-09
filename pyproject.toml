@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chronotome"
+version = "0.1.0"
+description = "A reproducible local bibliometric workflow for Scopus and Web of Science exports."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+keywords = ["bibliometrics", "scientometrics", "streamlit", "research"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "streamlit>=1.36,<2",
+    "pandas>=2.0,<3",
+    "numpy>=1.24,<3",
+    "matplotlib>=3.7,<4",
+    "seaborn>=0.12,<1",
+    "scipy>=1.10,<1.14",
+    "networkx>=3.1,<4",
+    "pycountry>=23.12",
+    "openpyxl>=3.1,<4",
+    "xlrd>=2.0,<3",
+    "scikit-learn>=1.3,<2",
+    "adjustText>=1.0,<2",
+    "nltk>=3.8,<4",
+    "wordcloud>=1.9,<2",
+    "gensim==4.3.3",
+]
+
+[project.scripts]
+chronotome = "chronotome.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AthenaP21/Chronotome"
+Repository = "https://github.com/AthenaP21/Chronotome"
+Issues = "https://github.com/AthenaP21/Chronotome/issues"
+
+[tool.setuptools.packages.find]
+include = ["chronotome", "chronotome.*", "chronotome_core", "chronotome_core.*", "chronotome_ui", "chronotome_ui.*"]
+
+[tool.setuptools.package-data]
+chronotome_core = ["institutions.json"]
+chronotome_ui = ["chronotome-logo.png"]

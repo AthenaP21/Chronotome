@@ -127,6 +127,12 @@ Grid alpha: 0.3""",
         value=30, key="source_title_length",
         help="Use a larger value to keep more of long journal/source names in the generated figure.",
     )
+    generate_analysis = st.button(
+        "Generate corpus analysis",
+        type="primary",
+        disabled=data is None,
+        key="generate-corpus-analysis",
+    )
     analysis_signature = (
         "svg-preview-v1", dataset_signature, int(cutoff_year), 10,
         int(min_source_papers), int(max_source_title_length),
@@ -134,7 +140,7 @@ Grid alpha: 0.3""",
 
     results = st.session_state.get("corpus_bibliometrics_results")
     current = results is not None and st.session_state.get("corpus_bibliometrics_signature") == analysis_signature
-    if data is not None and not current:
+    if generate_analysis and data is not None:
         try:
             with st.spinner("Computing corpus metrics and rendering publication-grade figures…"):
                 result = run_corpus_bibliometrics(
@@ -153,6 +159,8 @@ Grid alpha: 0.3""",
             st.error(f"An unexpected value stopped corpus analysis: {exc}")
 
     if not current:
+        if data is not None:
+            st.info("Set the analysis options above, then select Generate corpus analysis to create the results.")
         return
     for warning in results["warnings"]:
         st.warning(warning)
