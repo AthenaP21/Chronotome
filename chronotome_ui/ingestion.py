@@ -10,6 +10,7 @@ import streamlit as st
 from chronotome_core import run_ingestion
 from chronotome_core.export import dataframe_csv
 from chronotome_core.io import InputError, inspect_source_uploads
+from chronotome_ui.navigation import navigate_to_page
 from chronotome_ui.state import clear_downstream_state
 
 
@@ -60,14 +61,14 @@ def _show_verification(source: str, verification: dict):
     cols[2].metric("Columns", summary["Columns (union)"])
     cols[3].metric("Year range", summary["Year range"])
     cols[4].metric("DOI coverage", summary["DOI coverage"])
-    st.dataframe(verification["files"], use_container_width=True, hide_index=True)
+    st.dataframe(verification["files"], width="stretch", hide_index=True)
     signal_table = pd.DataFrame([
         ("Titles present", f"{summary['Titles present']:,}"),
         ("Affiliation coverage", summary["Affiliation coverage"]),
         ("Raw duplicate DOI rows", f"{summary['Raw duplicate DOI rows']:,}"),
         ("Mode", summary["Mode"]),
     ], columns=["Signal", "Detected value"])
-    st.dataframe(signal_table, use_container_width=True, hide_index=True)
+    st.dataframe(signal_table, width="stretch", hide_index=True)
     for warning in verification["warnings"]:
         st.warning(warning)
     if not verification["warnings"]:
@@ -91,7 +92,7 @@ def render_ingestion():
     )
     st.info(
         "Chronotome uses fault-tolerant format detection, comma/tab fallbacks, Excel parsing, "
-        "and the WoS `.xls` tab-text fallback from the notebook. Verification happens before "
+        "and the WoS `.xls` tab-text fallback. Verification happens before "
         "any records are merged."
     )
 
@@ -118,7 +119,7 @@ Appendage does not merge Scopus with WoS and does not silently combine different
     left, right = st.columns(2)
     with left:
         st.markdown("### Scopus")
-        st.caption("CSV recommended; TXT, XLS, and XLSX are also accepted by the notebook loader.")
+        st.caption("CSV recommended; TXT, XLS, and XLSX are also accepted.")
         scopus_files, scopus_mode = _source_uploader("Scopus", "Scopus" in selected_sources)
     with right:
         st.markdown("### Web of Science")
@@ -208,21 +209,21 @@ The result audit reports both removed records and missing metadata cells recover
 When enabled, Chronotome keeps only records where `Publication Year < cutoff year`. Use the current system year for automatic operation or provide the collection year for a reproducible manual cutoff. Disable the filter for a pure merge-and-deduplicate export.
             """
         )
-    with st.sidebar:
-        st.markdown("### Ingestion settings")
-        enable_time_filter = st.checkbox(
-            "Exclude collection year and later", value=True, key="ingestion_time_filter",
-            help="Retains the notebook's indexing-lag correction. Disable it for a pure merge/deduplication job.",
-        )
-        cutoff_source = st.radio(
-            "Cutoff source", ["Manual collection year", "Current system year"],
-            disabled=not enable_time_filter, key="ingestion_cutoff_source",
-        )
-        collection_year = st.number_input(
-            "Collection / cutoff year", 1900, datetime.now().year + 5, datetime.now().year,
-            disabled=not enable_time_filter or cutoff_source == "Current system year",
-            key="ingestion_collection_year",
-        )
+    st.markdown("### Ingestion settings")
+    set_left, set_mid, set_right = st.columns(3)
+    enable_time_filter = set_left.checkbox(
+        "Exclude collection year and later", value=True, key="ingestion_time_filter",
+        help="Use this to avoid incomplete indexing for the current collection year.",
+    )
+    cutoff_source = set_mid.radio(
+        "Cutoff source", ["Manual collection year", "Current system year"],
+        disabled=not enable_time_filter, key="ingestion_cutoff_source",
+    )
+    collection_year = set_right.number_input(
+        "Collection / cutoff year", 1900, datetime.now().year + 5, datetime.now().year,
+        disabled=not enable_time_filter or cutoff_source == "Current system year",
+        key="ingestion_collection_year",
+    )
     processing_signature = current_signature + (
         enable_time_filter,
         cutoff_source if enable_time_filter else "Disabled",
@@ -266,7 +267,7 @@ When enabled, Chronotome keeps only records where `Publication Year < cutoff yea
     )
     with cleaning_result_tab:
         st.markdown("#### Source preprocessing summary")
-        st.dataframe(results["preprocessing_audit"]["source_summary"], use_container_width=True, hide_index=True)
+        st.dataframe(results["preprocessing_audit"]["source_summary"], width="stretch", hide_index=True)
         st.caption(
             "Changed author strings are formatting changes only. Reference counts describe the breadth of the cited intellectual base; they are not a quality metric."
         )
@@ -274,27 +275,27 @@ When enabled, Chronotome keeps only records where `Publication Year < cutoff yea
         st.markdown("#### Source-to-unified mapping audit")
         mapping = results["preprocessing_audit"]["schema_mapping"]
         database = st.selectbox("Show mapping for", sorted(mapping["Database"].unique()), key="mapping_database")
-        st.dataframe(mapping[mapping["Database"] == database], use_container_width=True, hide_index=True)
+        st.dataframe(mapping[mapping["Database"] == database], width="stretch", hide_index=True)
         with st.expander("Final ordered unified schema"):
-            st.dataframe(results["preprocessing_audit"]["final_schema"], use_container_width=True, hide_index=True)
+            st.dataframe(results["preprocessing_audit"]["final_schema"], width="stretch", hide_index=True)
     with dedup_result_tab:
         st.markdown("#### Hierarchical deduplication and fusion audit")
-        st.dataframe(results["deduplication_audit"]["summary"], use_container_width=True, hide_index=True)
+        st.dataframe(results["deduplication_audit"]["summary"], width="stretch", hide_index=True)
         st.markdown("#### Matching rules")
-        st.dataframe(results["deduplication_audit"]["rules"], use_container_width=True, hide_index=True)
+        st.dataframe(results["deduplication_audit"]["rules"], width="stretch", hide_index=True)
         enrichment = results["deduplication_audit"]["enrichment_by_column"]
         if enrichment.empty:
             st.info("No missing metadata cells were filled during DOI fusion.")
         else:
             st.markdown("#### Metadata recovered from DOI duplicates")
-            st.dataframe(enrichment, use_container_width=True, hide_index=True)
+            st.dataframe(enrichment, width="stretch", hide_index=True)
     with temporal_result_tab:
-        st.dataframe(results["temporal_audit"], use_container_width=True, hide_index=True)
+        st.dataframe(results["temporal_audit"], width="stretch", hide_index=True)
         if not results["config"]["enable_time_filter"]:
             st.warning("The time filter was disabled. The latest year may be incomplete in annual production plots.")
     with prisma_tab:
         st.code(results["prisma_text"], language=None)
-        st.dataframe(results["prisma_table"], use_container_width=True, hide_index=True)
+        st.dataframe(results["prisma_table"], width="stretch", hide_index=True)
         report = results["prisma"]
         expected = report["merged_total"] - report["removed_by_doi"] - report["removed_by_title_year"] - report["excluded_by_time_filter"]
         if expected == report["final_total"]:
@@ -303,10 +304,10 @@ When enabled, Chronotome keeps only records where `Publication Year < cutoff yea
             st.warning("PRISMA arithmetic requires review; download the duplicate-detail table.")
     with dataset_tab:
         st.metric("Final unique records", f"{len(results['processed_data']):,}")
-        st.dataframe(results["processed_data"].head(100), use_container_width=True, hide_index=True)
+        st.dataframe(results["processed_data"].head(100), width="stretch", hide_index=True)
         if not results["duplicate_doi_records"].empty:
             with st.expander("DOI duplicate records used in data fusion"):
-                st.dataframe(results["duplicate_doi_records"].head(100), use_container_width=True, hide_index=True)
+                st.dataframe(results["duplicate_doi_records"].head(100), width="stretch", hide_index=True)
     with downloads_tab:
         exports = results["exports"]
         st.download_button(
@@ -330,5 +331,4 @@ When enabled, Chronotome keeps only records where `Publication Year < cutoff yea
             if name.startswith("stitched_") and name.endswith(".csv"):
                 st.download_button(f"Download {name}", content, name, "text/csv", key=f"result-{name}")
     if st.button("Continue to institutional and geographic entity resolution", type="primary"):
-        st.session_state["_chronotome_navigate_to"] = "Entity resolution"
-        st.rerun()
+        navigate_to_page("Entity resolution")

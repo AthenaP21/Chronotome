@@ -1,4 +1,4 @@
-"""Guided page for notebook sections 9 and 11–16."""
+"""Guided page for corpus characteristics and production trends."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ import pandas as pd
 import streamlit as st
 
 from chronotome_core import run_corpus_bibliometrics
+from chronotome_ui.figure_controls import render_customizable_figure
 from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.navigation import navigate_to_page
 from chronotome_ui.state import clear_downstream_state
 
 
@@ -17,8 +19,7 @@ def _select_dataset():
     if entity_results is None:
         st.warning("Complete Institutional and Geographic Entity Resolution before corpus analysis.")
         if st.button("Go to entity resolution", key="corpus-go-entity"):
-            st.session_state["_chronotome_navigate_to"] = "Entity resolution"
-            st.rerun()
+            navigate_to_page("Entity resolution")
         return None, None
     data = entity_results["article_summary"]
     st.success(f"Using the current entity-resolved article summary: {len(data):,} documents.")
@@ -47,16 +48,9 @@ def _figure_downloads(exports: dict, basename: str):
     )
 
 
-def _render_figure(exports: dict, basename: str):
+def _render_figure(exports: dict, basename: str, figure=None):
     """Render a sharp vector preview, then expose PNG, SVG, and PDF."""
-    png_path = f"Plots/{basename}.png"
-    svg_path = f"Plots/{basename}.svg"
-    if png_path in exports:
-        if svg_path in exports:
-            render_svg(exports[svg_path])
-        else:
-            st.image(exports[png_path], width="stretch")
-        _figure_downloads(exports, basename)
+    render_customizable_figure(exports, basename, f"corpus-{basename}", figure=figure)
 
 
 def _section(number: int, title: str, caption: str | None = None):
@@ -67,15 +61,15 @@ def _section(number: int, title: str, caption: str | None = None):
 
 
 def render_corpus_bibliometrics():
-    """Render descriptive/evaluative corpus analyses with exact notebook figures."""
+    """Render descriptive/evaluative corpus analyses."""
     st.title("Corpus Characteristics and Production Trends")
     st.markdown(
         "Phase 2 begins with the collection's scale, temporal boundaries, growth dynamics, "
         "time-normalized citation impact, document structure, and author performance."
     )
     st.info(
-        "Figures on this page reproduce the notebook's sizes, colors, annotations, axes, grids, "
-        "legends, and layouts. Downloads use **600-DPI PNG** and **vector PDF**."
+        "Use this page to inspect corpus scale, document structure, authorship, annual production, "
+        "citation dynamics, and source impact. Figures include publication-grade PNG, SVG, and PDF exports."
     )
 
     st.markdown("## 1. Analytical environment")
@@ -86,12 +80,11 @@ Figure preview DPI: 150
 Publication PNG DPI: 600
 Vector export: PDF
 Font family: sans-serif
-Global color cycle: 5 samples from Matplotlib Cividis (0.0 → 0.9)
 Grid alpha: 0.3""",
             language=None,
         )
         st.write(
-            "The downloadable ZIP mirrors the notebook's reproducible folder structure with "
+            "The downloadable ZIP uses a reproducible folder structure with "
             "separate `Plots/` and `Results/` directories."
         )
 
@@ -117,23 +110,23 @@ Grid alpha: 0.3""",
         configured = ingestion_results.get("config", {}).get("collection_year")
         if configured:
             default_cutoff = int(configured)
-    with st.sidebar:
-        st.markdown("### Phase 2 settings")
-        cutoff_year = st.number_input(
-            "Citation annualization cutoff year", min_value=1900,
-            max_value=datetime.now().year + 5, value=default_cutoff,
-            help="Used for citation age in the accumulated-prestige versus velocity figure.",
-            key="corpus_cutoff_year",
-        )
-        st.caption("Author rankings use the notebook default: Top 10.")
-        min_source_papers = st.number_input(
-            "Minimum papers for journal MNCS ranking", min_value=1, max_value=100,
-            value=5, key="source_min_papers",
-        )
-        max_source_title_length = st.number_input(
-            "Maximum journal-title length in plots", min_value=10, max_value=100,
-            value=30, key="source_title_length",
-        )
+    st.markdown("### Corpus analysis settings")
+    settings_left, settings_mid, settings_right = st.columns(3)
+    cutoff_year = settings_left.number_input(
+        "Citation annualization cutoff year", min_value=1900,
+        max_value=datetime.now().year + 5, value=default_cutoff,
+        help="Used for citation age in the accumulated-prestige versus velocity figure.",
+        key="corpus_cutoff_year",
+    )
+    min_source_papers = settings_mid.number_input(
+        "Minimum papers for source MNCS ranking", min_value=1, max_value=100,
+        value=5, key="source_min_papers",
+    )
+    max_source_title_length = settings_right.number_input(
+        "Maximum source-title length in generated plots", min_value=10, max_value=160,
+        value=30, key="source_title_length",
+        help="Use a larger value to keep more of long journal/source names in the generated figure.",
+    )
     analysis_signature = (
         "svg-preview-v1", dataset_signature, int(cutoff_year), 10,
         int(min_source_papers), int(max_source_title_length),
@@ -167,21 +160,21 @@ Grid alpha: 0.3""",
     tables, figures, exports = results["tables"], results["figures"], results["exports"]
     _section(3, "Corpus summary", "Core scale, coverage, citation, source, and resource descriptors.")
     st.markdown("#### Main dataset information")
-    st.dataframe(tables["main_information_summary"], use_container_width=True, hide_index=True)
+    st.dataframe(tables["main_information_summary"], width="stretch", hide_index=True)
     with st.expander("Computational resource audit"):
-        st.dataframe(tables["dataframe_memory_audit"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["dataframe_memory_audit"], width="stretch", hide_index=True)
 
     _section(4, "Time-normalized citations (MNCS)",
              "The benchmark is the uploaded corpus, not the full Scopus or Web of Science database.")
     st.latex(r"MNCS_{paper} = \frac{Citations_{paper}}{AverageCitations_{publication\ year}}")
-    st.dataframe(tables["mncs_yearly_baselines"], use_container_width=True, hide_index=True)
+    st.dataframe(tables["mncs_yearly_baselines"], width="stretch", hide_index=True)
     preview = [column for column in ["Title", "Publication Year", "Cited by", "MNCS"] if column in results["data"]]
     with st.expander("Article-level MNCS preview"):
-        st.dataframe(results["data"][preview].head(50), use_container_width=True, hide_index=True)
+        st.dataframe(results["data"][preview].head(50), width="stretch", hide_index=True)
 
     _section(5, "Document typology", "Standardized structural morphology of the corpus.")
-    st.dataframe(tables["document_type_summary"], use_container_width=True, hide_index=True)
-    _render_figure(exports, "document_types")
+    st.dataframe(tables["document_type_summary"], width="stretch", hide_index=True)
+    _render_figure(exports, "document_types", figures.get("document_types"))
 
     _section(6, "Author productivity and impact",
              f"Author analysis column: {results['author_column'] or 'Not available'}")
@@ -190,25 +183,25 @@ Grid alpha: 0.3""",
         st.markdown("#### Top authors by volume")
         st.dataframe(
             author_table.sort_values(["Total_Papers", "Total_Citations"], ascending=False).head(10),
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
         )
-        _render_figure(exports, "author_productivity_ranking")
+        _render_figure(exports, "author_productivity_ranking", figures.get("author_productivity_ranking"))
         st.markdown("#### Top authors by fractionalized contribution and MNCS")
         st.dataframe(
             author_table.sort_values(["Fractional_Credit", "Avg_MNCS"], ascending=False).head(10),
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
         )
-        _render_figure(exports, "author_impact_panel_chart")
+        _render_figure(exports, "author_impact_panel_chart", figures.get("author_impact_panel_chart"))
 
     _section(7, "Annual scientific production", "Gap-filled annual output and linear growth reliability.")
-    st.dataframe(tables["annual_scientific_production"].tail(20), use_container_width=True, hide_index=True)
-    st.dataframe(tables["growth_regression_statistics"], use_container_width=True, hide_index=True)
-    _render_figure(exports, "annual_scientific_production")
+    st.dataframe(tables["annual_scientific_production"].tail(20), width="stretch", hide_index=True)
+    st.dataframe(tables["growth_regression_statistics"], width="stretch", hide_index=True)
+    _render_figure(exports, "annual_scientific_production", figures.get("annual_scientific_production"))
 
     _section(8, "Citation impact dynamics",
              "Accumulated citation prestige compared with annualized citation velocity.")
-    st.dataframe(tables["citation_dynamics"].tail(20), use_container_width=True, hide_index=True)
-    _render_figure(exports, "citation_dynamics_dual_axis")
+    st.dataframe(tables["citation_dynamics"].tail(20), width="stretch", hide_index=True)
+    _render_figure(exports, "citation_dynamics_dual_axis", figures.get("citation_dynamics_dual_axis"))
 
     _section(9, "Source impact analysis",
              "H-, G-, M-indices and MNCS are local to this corpus, not global JCR or SJR metrics.")
@@ -217,9 +210,9 @@ Grid alpha: 0.3""",
         st.warning("No source-level results were available.")
     else:
         with st.expander("Complete source-level bibliometric indices"):
-            st.dataframe(source_stats, use_container_width=True, hide_index=True)
+            st.dataframe(source_stats, width="stretch", hide_index=True)
         st.markdown("#### Descriptive indicators")
-        _render_figure(exports, "composite_top_sources_descriptive")
+        _render_figure(exports, "composite_top_sources_descriptive", figures.get("composite_top_sources_descriptive"))
         ranking_items = (
             ("Volume", "top_sources_by_volume"),
             ("Local H-index", "top_sources_by_h_index"),
@@ -229,10 +222,10 @@ Grid alpha: 0.3""",
         )
         for label, key in ranking_items:
             st.markdown(f"#### {label}")
-            st.dataframe(tables.get(key, pd.DataFrame()), use_container_width=True, hide_index=True)
+            st.dataframe(tables.get(key, pd.DataFrame()), width="stretch", hide_index=True)
         if "Plots/top_10_journals_impact_analysis.png" in exports:
             st.markdown("#### Accumulated prestige versus normalized efficiency")
-            _render_figure(exports, "top_10_journals_impact_analysis")
+            _render_figure(exports, "top_10_journals_impact_analysis", figures.get("top_10_journals_impact_analysis"))
 
     _section(10, "Downloads", "Complete publication-grade figures, tables, and enriched analysis data.")
     st.download_button(
@@ -256,5 +249,4 @@ Grid alpha: 0.3""",
 
     st.markdown("---")
     if st.button("Continue to geographic analysis", type="primary", key="corpus-to-geographic"):
-        st.session_state["_chronotome_navigate_to"] = "Geographic analysis"
-        st.rerun()
+        navigate_to_page("Geographic analysis")

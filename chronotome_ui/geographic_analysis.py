@@ -1,4 +1,4 @@
-"""Guided page for notebook Sections 17–18 country analysis."""
+"""Guided page for country distribution, impact, and collaboration analysis."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from chronotome_core import run_country_case_study, run_geographic_bibliometrics
+from chronotome_ui.figure_controls import render_customizable_figure
 from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.navigation import navigate_to_page, request_scroll_to_top
 from chronotome_ui.state import clear_downstream_state
 
 
@@ -15,8 +17,7 @@ def _select_dataset():
     if corpus_results is None or "Countries_Extracted" not in corpus_results.get("data", pd.DataFrame()):
         st.warning("Complete Corpus Characteristics and Production Trends before geographic analysis.")
         if st.button("Go to corpus and production", key="geographic-go-corpus"):
-            st.session_state["_chronotome_navigate_to"] = "Corpus & production"
-            st.rerun()
+            navigate_to_page("Corpus & production")
         return None, None
     data = corpus_results["data"]
     st.success(f"Using the current corpus dataset with MNCS: {len(data):,} documents.")
@@ -45,16 +46,9 @@ def _figure_downloads(exports: dict, basename: str):
     )
 
 
-def _render_figure(exports: dict, basename: str):
+def _render_figure(exports: dict, basename: str, figure=None):
     """Render a sharp vector preview, then expose PNG, SVG, and PDF."""
-    png_path = f"Plots/{basename}.png"
-    svg_path = f"Plots/{basename}.svg"
-    if png_path in exports:
-        if svg_path in exports:
-            render_svg(exports[svg_path])
-        else:
-            st.image(exports[png_path], width="stretch")
-        _figure_downloads(exports, basename)
+    render_customizable_figure(exports, basename, f"geo-{basename}", figure=figure)
 
 
 def _section(number: int, title: str, caption: str | None = None):
@@ -95,11 +89,10 @@ def _render_country_case_study(case_result: dict):
         st.session_state["country_selector_epoch"] = st.session_state.get("country_selector_epoch", 0) + 1
         st.session_state.pop("geographic_case_result", None)
         st.session_state.pop("geographic_case_token", None)
-        st.session_state["_chronotome_scroll_top"] = True
-        st.rerun()
+        request_scroll_to_top()
 
     st.title(f"Country Case Study: {country}")
-    st.caption("Notebook Sections 20–21 · temporal dashboard and statistical field guide")
+    st.caption("Temporal dashboard and statistical field guide")
     for warning in case_result["warnings"]:
         st.warning(warning)
     metadata = case_result["metadata"]
@@ -137,44 +130,44 @@ def _render_country_case_study(case_result: dict):
     _section(2, "Statistical report", "Paper-level provenance, venue, morphology, and conference structure.")
     summary_display = tables["country_case_summary"].copy()
     summary_display["Value"] = summary_display["Value"].astype(str)
-    st.dataframe(summary_display, use_container_width=True, hide_index=True)
+    st.dataframe(summary_display, width="stretch", hide_index=True)
     left, right = st.columns(2)
     with left:
         st.markdown("#### Database provenance")
-        st.dataframe(tables["database_provenance"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["database_provenance"], width="stretch", hide_index=True)
         st.markdown("#### Top journals and sources")
-        st.dataframe(tables["top_journals"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["top_journals"], width="stretch", hide_index=True)
     with right:
         st.markdown("#### Document morphology")
-        st.dataframe(tables["document_types"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["document_types"], width="stretch", hide_index=True)
         st.markdown("#### Conference participation")
-        st.dataframe(tables["top_conferences"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["top_conferences"], width="stretch", hide_index=True)
 
     _section(3, "Institutions and collaboration partners")
     left, right = st.columns(2)
     with left:
         st.markdown("#### Leading affiliated institutions")
-        st.dataframe(tables["top_institutions"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["top_institutions"], width="stretch", hide_index=True)
     with right:
         st.markdown("#### International collaboration partners")
-        st.dataframe(tables["collaboration_partners"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["collaboration_partners"], width="stretch", hide_index=True)
 
     _section(4, "Keywords and funding")
     left, right = st.columns(2)
     with left:
         st.markdown("#### Author keywords")
-        st.dataframe(tables["author_keywords"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["author_keywords"], width="stretch", hide_index=True)
     with right:
         st.markdown("#### Funding organizations")
-        st.dataframe(tables["funding_organizations"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["funding_organizations"], width="stretch", hide_index=True)
 
     _section(5, "Timeline and rank")
     st.markdown("#### Year-by-year publication and citation summary")
-    st.dataframe(tables["yearly_statistical_summary"], use_container_width=True, hide_index=True)
+    st.dataframe(tables["yearly_statistical_summary"], width="stretch", hide_index=True)
     st.markdown("#### Global rank evolution")
-    st.dataframe(tables["country_rank_evolution"], use_container_width=True, hide_index=True)
+    st.dataframe(tables["country_rank_evolution"], width="stretch", hide_index=True)
     with st.expander("Productivity cohort membership"):
-        st.dataframe(tables["country_productivity_categories"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["country_productivity_categories"], width="stretch", hide_index=True)
 
     _section(6, "Downloads", "Complete dashboard, report, and tabular case-study package.")
     st.download_button(
@@ -199,10 +192,9 @@ def _render_country_case_study(case_result: dict):
         st.session_state["country_selector_epoch"] = st.session_state.get("country_selector_epoch", 0) + 1
         st.session_state.pop("geographic_case_result", None)
         st.session_state.pop("geographic_case_token", None)
-        st.session_state["_chronotome_scroll_top"] = True
-        st.rerun()
+        request_scroll_to_top()
 def render_geographic_analysis():
-    """Render notebook-faithful country collaboration, impact, and network analyses."""
+    """Render country collaboration, impact, and network analyses."""
     if (
         st.session_state.get("geographic_view") == "case"
         and st.session_state.get("geographic_case_result") is not None
@@ -217,8 +209,8 @@ def render_geographic_analysis():
         "collaboration is structured."
     )
     st.info(
-        "This is a separate analytical phase from journal/source impact. Figures preserve the notebook's "
-        "Cividis colors, dimensions, annotations, axes, legends, and panel layouts."
+        "This phase summarizes country coverage, SCP/MCP collaboration, citation impact, and "
+        "international collaboration structure for the current corpus."
     )
 
     st.markdown("## 1. Select the entity-resolved dataset")
@@ -263,46 +255,46 @@ def render_geographic_analysis():
                         "run Entity Resolution in this workflow first to include domestic institution rankings in case studies."
                     )
 
-    with st.sidebar:
-        st.markdown("### Geographic settings")
-        collaboration_top_n = st.number_input(
-            "Countries in SCP/MCP plot", min_value=1, max_value=50, value=10,
-            help="Notebook default: Top 10 by article appearances.", key="geo_collaboration_top_n",
-        )
-        impact_top_n = st.number_input(
-            "Countries in impact plot", min_value=1, max_value=50, value=15,
-            help="Notebook default: Top 15 by MNCS after the minimum-paper filter.", key="geo_impact_top_n",
-        )
-        min_papers = st.number_input(
-            "Minimum papers for country impact", min_value=1, max_value=100, value=5,
-            help="Reduces unstable MNCS rankings from countries with very few papers.", key="geo_min_papers",
-        )
-        exclude_unknown = st.checkbox(
-            "Exclude Unknown from rankings", value=True,
-            help="Unknown records remain in the audit and article-level export.", key="geo_exclude_unknown",
-        )
-        st.markdown("#### Advanced country analysis")
-        advanced_min_publications = st.number_input(
+    st.markdown("### Geographic analysis settings")
+    basic_left, basic_mid, basic_right, basic_last = st.columns(4)
+    collaboration_top_n = basic_left.number_input(
+        "Countries in SCP/MCP plot", min_value=1, max_value=50, value=10,
+        help="Default: top countries by article appearances.", key="geo_collaboration_top_n",
+    )
+    impact_top_n = basic_mid.number_input(
+        "Countries in impact plot", min_value=1, max_value=50, value=15,
+        help="Top countries by MNCS after the minimum-paper filter.", key="geo_impact_top_n",
+    )
+    min_papers = basic_right.number_input(
+        "Minimum papers for country impact", min_value=1, max_value=100, value=5,
+        help="Reduces unstable MNCS rankings from countries with very few papers.", key="geo_min_papers",
+    )
+    exclude_unknown = basic_last.checkbox(
+        "Exclude Unknown from rankings", value=True,
+        help="Unknown records remain in the audit and article-level export.", key="geo_exclude_unknown",
+    )
+    with st.expander("Advanced country-analysis settings", expanded=False):
+        adv_left, adv_mid, adv_right, adv_last = st.columns(4)
+        advanced_min_publications = adv_left.number_input(
             "Minimum papers for performance matrix", min_value=1, max_value=100, value=5,
-            help="Notebook default: 5 publications.", key="geo_advanced_min_pubs",
+            key="geo_advanced_min_pubs",
         )
-        citation_top_n = st.number_input(
+        citation_top_n = adv_mid.number_input(
             "Countries in citation distribution", min_value=1, max_value=50, value=15,
-            help="Notebook default: Top 15 by total citations.", key="geo_citation_top_n",
+            key="geo_citation_top_n",
         )
-        network_top_n = st.number_input(
+        network_top_n = adv_right.number_input(
             "Countries in collaboration network", min_value=2, max_value=100, value=30,
-            help="Notebook default: Top 30 by weighted degree.", key="geo_network_top_n",
+            key="geo_network_top_n",
         )
-        top_k_edges = st.number_input(
-            "Strongest ties retained per country", min_value=1, max_value=20, value=5,
-            help="Notebook default: Top 5 edges per node.", key="geo_top_k_edges",
+        top_k_edges = adv_last.number_input(
+            "Strongest ties per country", min_value=1, max_value=20, value=5,
+            key="geo_top_k_edges",
         )
-        with st.expander("Network layout setting"):
-            network_iterations = st.number_input(
-                "Spring-layout iterations", min_value=25, max_value=1000, value=250, step=25,
-                help="Lower this for faster rendering on very large networks.", key="geo_network_iterations",
-            )
+        network_iterations = st.number_input(
+            "Spring-layout iterations", min_value=25, max_value=1000, value=250, step=25,
+            help="Lower this for faster rendering on very large networks.", key="geo_network_iterations",
+        )
     analysis_signature = (
         "svg-preview-v1", dataset_signature, int(collaboration_top_n), int(impact_top_n),
         int(min_papers), bool(exclude_unknown), int(advanced_min_publications),
@@ -359,15 +351,15 @@ def render_geographic_analysis():
     c2.metric("Active countries", f"{metadata['active_countries']:,}")
     c3.metric("SCP articles", f"{metadata['scp_articles']:,}")
     c4.metric("MCP articles", f"{metadata['mcp_articles']:,}")
-    st.dataframe(tables["country_classification_summary"], use_container_width=True, hide_index=True)
+    st.dataframe(tables["country_classification_summary"], width="stretch", hide_index=True)
     if metadata["unknown_articles"]:
         st.caption(f"Unknown-country articles retained for audit: {metadata['unknown_articles']:,}.")
 
     _section(3, "SCP/MCP collaboration", "Country production split between domestic and international papers.")
-    st.dataframe(tables["top_countries_by_volume"], use_container_width=True, hide_index=True)
-    _render_figure(exports, "top_10_countries_collaboration")
+    st.dataframe(tables["top_countries_by_volume"], width="stretch", hide_index=True)
+    _render_figure(exports, "top_10_countries_collaboration", figures.get("top_10_countries_collaboration"))
     with st.expander("Complete country collaboration table"):
-        st.dataframe(tables["country_collaboration_summary"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["country_collaboration_summary"], width="stretch", hide_index=True)
 
     _section(4, "Country impact",
              "MNCS is normalized against publication-year averages inside this corpus, not a global database.")
@@ -375,21 +367,24 @@ def render_geographic_analysis():
     if impact_table.empty:
         st.warning("No country met the configured minimum-paper threshold.")
     else:
-        st.dataframe(impact_table, use_container_width=True, hide_index=True)
-        _render_figure(exports, "country_impact_comparison")
+        st.dataframe(impact_table, width="stretch", hide_index=True)
+        _render_figure(exports, "country_impact_comparison", figures.get("country_impact_comparison"))
     with st.expander("Complete country volume and impact table"):
-        st.dataframe(tables["country_master_stats"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["country_master_stats"], width="stretch", hide_index=True)
 
     _section(5, "Citation prestige", "Accumulated citation distribution across the most-cited countries.")
-    st.dataframe(tables["top_countries_by_total_citations"], use_container_width=True, hide_index=True)
-    _render_figure(exports, "Country_Citation_Impact_Distribution")
+    st.dataframe(tables["top_countries_by_total_citations"], width="stretch", hide_index=True)
+    _render_figure(exports, "Country_Citation_Impact_Distribution", figures.get("Country_Citation_Impact_Distribution"))
 
     _section(6, "Scientometric performance matrix",
              "X = log publication volume; Y and color = internal MNCS; bubble area = accumulated citations.")
     if "Plots/Scientometric_Performance_Matrix_Productivity_vs_Impact.png" in exports:
-        _render_figure(exports, "Scientometric_Performance_Matrix_Productivity_vs_Impact")
+        _render_figure(
+            exports, "Scientometric_Performance_Matrix_Productivity_vs_Impact",
+            figures.get("Scientometric_Performance_Matrix_Productivity_vs_Impact"),
+        )
         with st.expander("Countries included in the matrix"):
-            st.dataframe(tables["country_performance_matrix_data"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["country_performance_matrix_data"], width="stretch", hide_index=True)
     else:
         st.warning("No country met the configured minimum-publication threshold.")
 
@@ -400,11 +395,14 @@ def render_geographic_analysis():
     c2.metric("Full-network links", f"{metadata['network_links']:,}")
     c3.metric("Displayed countries", f"{metadata['displayed_network_countries']:,}")
     if "Plots/International_Collaboration_Network_Topology.png" in exports:
-        _render_figure(exports, "International_Collaboration_Network_Topology")
+        _render_figure(
+            exports, "International_Collaboration_Network_Topology",
+            figures.get("International_Collaboration_Network_Topology"),
+        )
         with st.expander("Network nodes"):
-            st.dataframe(tables["international_collaboration_nodes"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["international_collaboration_nodes"], width="stretch", hide_index=True)
         with st.expander("Network edges"):
-            st.dataframe(tables["international_collaboration_edges"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["international_collaboration_edges"], width="stretch", hide_index=True)
     else:
         st.warning("No multi-country links were available for a collaboration network.")
 
@@ -414,7 +412,7 @@ def render_geographic_analysis():
             "Title", "Publication Year", "Countries_Extracted", "Country_Classification", "Cited by", "MNCS"
         ) if column in results["data"].columns
     ]
-    st.dataframe(results["data"][preview_columns].head(200), use_container_width=True, hide_index=True)
+    st.dataframe(results["data"][preview_columns].head(200), width="stretch", hide_index=True)
 
     _section(9, "Downloads", "Complete publication-grade figures, tables, networks, and classified data.")
     st.download_button(
@@ -488,6 +486,10 @@ def render_geographic_analysis():
                 st.error(f"An unexpected value stopped the {selected_country} case study: {exc}")
 
     st.markdown("---")
-    if st.button("Continue to institutional analysis", type="primary", key="geographic-to-institutional"):
-        st.session_state["_chronotome_navigate_to"] = "Institutional analysis"
-        st.rerun()
+    nav_left, nav_mid, nav_right = st.columns(3)
+    if nav_left.button("Continue to advanced analyses", type="primary", key="geographic-to-advanced"):
+        navigate_to_page("Advanced analyses")
+    if nav_mid.button("Continue to thematic analysis", key="geographic-to-thematic"):
+        navigate_to_page("Thematic analysis")
+    if nav_right.button("Continue to institutional analysis", key="geographic-to-institutional"):
+        navigate_to_page("Institutional analysis")

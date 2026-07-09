@@ -92,28 +92,28 @@ def render_full_workflow():
 
     _section(2, "Background workflow settings",
              "Topic counts are selected automatically; all six institutional modes and community plots are included.")
-    with st.sidebar:
-        st.markdown("### Full workflow settings")
-        enable_time_filter = st.checkbox(
-            "Exclude collection year and later", value=True, key="full-time-filter",
-        )
-        collection_year = st.number_input(
-            "Collection / cutoff year", min_value=1900, max_value=datetime.now().year + 5,
-            value=datetime.now().year, disabled=not enable_time_filter, key="full-cutoff-year",
-        )
-        top_n = st.number_input("Ranking size", min_value=5, max_value=50, value=10, key="full-top-n")
-        min_papers = st.number_input(
-            "Minimum papers for impact rankings", min_value=1, max_value=100,
-            value=5, key="full-min-papers",
-        )
-        institutional_top_n = st.number_input(
-            "Institutions in standard network plots", min_value=5, max_value=100,
-            value=30, key="full-institutional-top-n",
-        )
-        max_institutions = st.number_input(
-            "Mega-consortium exclusion threshold", min_value=2, max_value=500,
-            value=50, key="full-max-institutions",
-        )
+    fw_left, fw_mid, fw_right = st.columns(3)
+    enable_time_filter = fw_left.checkbox(
+        "Exclude collection year and later", value=True, key="full-time-filter",
+    )
+    collection_year = fw_mid.number_input(
+        "Collection / cutoff year", min_value=1900, max_value=datetime.now().year + 5,
+        value=datetime.now().year, disabled=not enable_time_filter, key="full-cutoff-year",
+    )
+    top_n = fw_right.number_input("Ranking size", min_value=5, max_value=50, value=10, key="full-top-n")
+    net_left, net_mid, net_right = st.columns(3)
+    min_papers = net_left.number_input(
+        "Minimum papers for impact rankings", min_value=1, max_value=100,
+        value=5, key="full-min-papers",
+    )
+    institutional_top_n = net_mid.number_input(
+        "Institutions in standard network plots", min_value=5, max_value=100,
+        value=30, key="full-institutional-top-n",
+    )
+    max_institutions = net_right.number_input(
+        "Mega-consortium exclusion threshold", min_value=2, max_value=500,
+        value=50, key="full-max-institutions",
+    )
 
     config = {
         "enable_time_filter": bool(enable_time_filter),

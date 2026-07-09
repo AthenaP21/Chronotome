@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from chronotome_core import run_entity_resolution
+from chronotome_ui.navigation import navigate_to_page
 from chronotome_ui.state import clear_downstream_state
 from chronotome_core.entity_resolution import validate_institution_alias_json
 
@@ -105,7 +106,7 @@ def render_entity_resolution():
         try:
             alias_info = validate_institution_alias_json(alias_upload)
             alias_signature = (alias_info["name"], hashlib.sha256(alias_info["content"]).hexdigest())
-            st.dataframe(_alias_summary_table(alias_info), use_container_width=True, hide_index=True)
+            st.dataframe(_alias_summary_table(alias_info), width="stretch", hide_index=True)
             if alias_info["collisions"].empty:
                 st.success("Alias map structure is valid and no conflicting lookup keys were found.")
             else:
@@ -129,7 +130,7 @@ def render_entity_resolution():
 - Clean HTML entities, bracketed fragments, punctuation, spacing, and diacritics.
 - Split article affiliations on semicolons to create one row per affiliation.
 - Score comma-separated components to select the most institution-like fragment.
-- Expand notebook abbreviations (`Univ` → `University`, `Inst` → `Institute`, etc.).
+- Expand common affiliation abbreviations (`Univ` → `University`, `Inst` → `Institute`, etc.).
 - Apply complex patterns for Max Planck and CSIC/INTA, then the selected alias lookup.
 - Treat the last comma-separated component as the country candidate and standardize it with aliases and `pycountry`.
 - Aggregate unique standardized institutions and countries back to the article level.
@@ -164,45 +165,45 @@ def render_entity_resolution():
         ["Overview", "Affiliation-level table", "Article-level summary", "Cleaning report", "Alias audit", "Downloads"]
     )
     with overview_tab:
-        st.dataframe(results["audit"]["summary"], use_container_width=True, hide_index=True)
+        st.dataframe(results["audit"]["summary"], width="stretch", hide_index=True)
         left, right = st.columns(2)
         with left:
             st.markdown("#### Most frequent institutions")
-            st.dataframe(results["audit"]["institution_frequencies"].head(25), use_container_width=True, hide_index=True)
+            st.dataframe(results["audit"]["institution_frequencies"].head(25), width="stretch", hide_index=True)
         with right:
             st.markdown("#### Most frequent countries")
-            st.dataframe(results["audit"]["country_frequencies"].head(25), use_container_width=True, hide_index=True)
+            st.dataframe(results["audit"]["country_frequencies"].head(25), width="stretch", hide_index=True)
     with affiliations_tab:
         st.caption(f"Showing the first 200 of {len(results['affiliations']):,} extracted affiliation rows.")
-        st.dataframe(results["affiliations"].head(200), use_container_width=True, hide_index=True)
+        st.dataframe(results["affiliations"].head(200), width="stretch", hide_index=True)
     with articles_tab:
         columns = [column for column in ["Title", "Publication Year", "Countries_Extracted",
                    "Institutions_Extracted", "Country_Count", "Collaboration_Type"]
                    if column in results["article_summary"]]
-        st.dataframe(results["article_summary"][columns].head(200), use_container_width=True, hide_index=True)
+        st.dataframe(results["article_summary"][columns].head(200), width="stretch", hide_index=True)
     with cleaning_tab:
         st.markdown("#### Abbreviation expansions")
         if results["audit"]["abbreviations"].empty:
             st.info("No configured abbreviations were expanded.")
         else:
-            st.dataframe(results["audit"]["abbreviations"], use_container_width=True, hide_index=True)
+            st.dataframe(results["audit"]["abbreviations"], width="stretch", hide_index=True)
         st.markdown("#### Complex regular-expression patterns")
-        st.dataframe(results["audit"]["complex_patterns"], use_container_width=True, hide_index=True)
+        st.dataframe(results["audit"]["complex_patterns"], width="stretch", hide_index=True)
         st.markdown("#### Unresolved country fragments")
         if results["audit"]["unresolved_countries"].empty:
             st.success("All detected country fragments were standardized.")
         else:
-            st.dataframe(results["audit"]["unresolved_countries"], use_container_width=True, hide_index=True)
+            st.dataframe(results["audit"]["unresolved_countries"], width="stretch", hide_index=True)
     with aliases_tab:
         st.markdown("#### Applied institution alias mappings")
-        st.dataframe(results["audit"]["aliases"].head(100), use_container_width=True, hide_index=True)
+        st.dataframe(results["audit"]["aliases"].head(100), width="stretch", hide_index=True)
         st.markdown("#### Alias collisions")
         if results["alias_info"]["collisions"].empty:
             st.success("No alias collisions were detected.")
         else:
-            st.dataframe(results["alias_info"]["collisions"], use_container_width=True, hide_index=True)
+            st.dataframe(results["alias_info"]["collisions"], width="stretch", hide_index=True)
         with st.expander("Backup canonicals ignored because they were absent from the selected JSON"):
-            st.dataframe(results["alias_info"]["backup_ignored"], use_container_width=True, hide_index=True)
+            st.dataframe(results["alias_info"]["backup_ignored"], width="stretch", hide_index=True)
     with downloads_tab:
         exports = results["exports"]
         st.download_button(
@@ -220,5 +221,4 @@ def render_entity_resolution():
             st.download_button(f"Download {label}", exports[filename], filename, mime, key=f"entity-{filename}")
 
     if st.button("Continue to corpus characteristics and production trends"):
-        st.session_state["_chronotome_navigate_to"] = "Corpus & production"
-        st.rerun()
+        navigate_to_page("Corpus & production")

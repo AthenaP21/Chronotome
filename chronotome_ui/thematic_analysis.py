@@ -17,7 +17,8 @@ from chronotome_core.thematic_bibliometrics import (
     DEFAULT_BLOCKLIST_PHRASES, DEFAULT_NOISE_LISTS,
     install_nltk_resources, thematic_resource_status,
 )
-from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.figure_controls import render_customizable_figure
+from chronotome_ui.navigation import navigate_to_page
 from chronotome_ui.state import clear_downstream_state
 
 
@@ -76,14 +77,8 @@ def _parse_terms(text: str) -> set[str]:
 
 def _render_figure(result: dict, basename: str, prefix: str):
     exports = result["exports"]
-    svg_path, png_path, pdf_path = (f"Plots/{basename}.{extension}" for extension in ("svg", "png", "pdf"))
-    if svg_path not in exports:
-        return
-    render_svg(exports[svg_path])
-    left, middle, right = st.columns(3)
-    left.download_button("Download 600-DPI PNG", exports[png_path], f"{basename}.png", "image/png", key=f"{prefix}-png")
-    middle.download_button("Download vector SVG", exports[svg_path], f"{basename}.svg", "image/svg+xml", key=f"{prefix}-svg")
-    right.download_button("Download vector PDF", exports[pdf_path], f"{basename}.pdf", "application/pdf", key=f"{prefix}-pdf")
+    figure = result.get("figures", {}).get(basename)
+    render_customizable_figure(exports, basename, prefix, figure=figure)
 
 
 def _stage_downloads(result: dict, archive: str, workbook: str, prefix: str):
@@ -101,8 +96,8 @@ def render_thematic_analysis():
         "then evaluates LDA/NMF topic solutions and tracks their evolution over time."
     )
     st.info(
-        "Your database search string is removed from the thematic vocabulary. Every noise category is "
-        "visible and editable, and nothing computationally expensive runs automatically."
+        "Use this module to prepare clean thematic terms, inspect n-grams, evaluate topic models, "
+        "and study topic evolution and specialization."
     )
 
     _section(1, "Select the thematic dataset")
@@ -159,7 +154,7 @@ def render_thematic_analysis():
         disabled=not remove_search_terms,
     )
     if not remove_search_terms:
-        st.caption("Query-term removal is disabled; only stopwords and the editable noise lists will be applied.")
+        st.caption("Query-term removal is currently off. Terms such as “artificial intelligence” or “machine learning” can remain visible in the results.")
     if st.button("Restore all default noise lists", key="thematic-reset-noise"):
         for category in DEFAULT_NOISE_LISTS:
             st.session_state.pop(f"thematic_noise_{category}", None)
@@ -181,14 +176,26 @@ def render_thematic_analysis():
         )
         blocklist = _parse_terms(block_text)
 
-    with st.sidebar:
-        st.markdown("### Thematic settings")
-        automatic_min_df = st.checkbox("Automatic n-gram minimum frequency", value=True, key="thematic_auto_min_df")
-        manual_min_df = st.number_input("N-gram minimum document frequency", min_value=1, max_value=1000,
-                                        value=2, disabled=automatic_min_df, key="thematic_min_df")
-        ngram_max_df = st.slider("N-gram maximum document share", 0.50, 1.00, 0.90, 0.01, key="thematic_ngram_max_df")
-        model_min_df = st.number_input("Topic-model minimum document frequency", 1, 100, 2, key="thematic_model_min_df")
-        model_max_df = st.slider("Topic-model maximum document share", 0.50, 1.00, 0.95, 0.01, key="thematic_model_max_df")
+    st.markdown("### Thematic extraction settings")
+    ng_left, ng_mid, ng_right = st.columns(3)
+    automatic_min_df = ng_left.checkbox("Automatic n-gram minimum frequency", value=True, key="thematic_auto_min_df")
+    manual_min_df = ng_mid.number_input(
+        "N-gram minimum document frequency", min_value=1, max_value=1000,
+        value=2, disabled=automatic_min_df, key="thematic_min_df",
+    )
+    ngram_max_df = ng_right.slider(
+        "N-gram maximum document share", 0.50, 1.00, 0.90, 0.01,
+        key="thematic_ngram_max_df",
+    )
+    with st.expander("Topic-model vectorizer settings", expanded=False):
+        model_left, model_right = st.columns(2)
+        model_min_df = model_left.number_input(
+            "Topic-model minimum document frequency", 1, 100, 2, key="thematic_model_min_df",
+        )
+        model_max_df = model_right.slider(
+            "Topic-model maximum document share", 0.50, 1.00, 0.95, 0.01,
+            key="thematic_model_max_df",
+        )
 
     settings_signature = (
         "thematic-v2", dataset_signature, bool(remove_search_terms), search_string if remove_search_terms else "",
@@ -365,3 +372,7 @@ def render_thematic_analysis():
                          "advanced_thematic_tables.xlsx", "thematic-advanced")
     elif advanced:
         st.warning("The final model or advanced settings changed. Rerun advanced thematic analysis.")
+
+    st.markdown("---")
+    if st.button("Continue to institutional analysis", type="primary", key="thematic-to-institutional"):
+        navigate_to_page("Institutional analysis")

@@ -7,6 +7,7 @@ import json
 import zipfile
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
@@ -15,7 +16,51 @@ import pandas as pd
 MAX_RASTER_SIDE_PX = 7200
 _RASTER_DPI_LIMIT = ContextVar("chronotome_raster_dpi_limit", default=None)
 _RASTER_SIDE_LIMIT = ContextVar("chronotome_raster_side_limit", default=MAX_RASTER_SIDE_PX)
+_LOGO_WATERMARK_ENABLED = ContextVar("chronotome_logo_watermark_enabled", default=True)
 _LIST_LIKE_TYPES = (list, dict, tuple, set)
+
+
+@contextmanager
+def logo_watermark_policy(enabled=True):
+    """Temporarily enable or disable logo watermarking for figure exports."""
+    token = _LOGO_WATERMARK_ENABLED.set(bool(enabled))
+    try:
+        yield
+    finally:
+        _LOGO_WATERMARK_ENABLED.reset(token)
+
+
+def _logo_watermark_path() -> Path:
+    root = Path(__file__).resolve().parents[1]
+    preferred = root / "assets" / "chronotome-logo.png"
+    if preferred.exists():
+        return preferred
+    return root / "chronotome-logo.png"
+
+
+@contextmanager
+def _temporary_logo_watermark(figure):
+    """Add a subtle logo watermark only while a figure is being exported."""
+    watermark_axis = None
+    path = _logo_watermark_path()
+    if _LOGO_WATERMARK_ENABLED.get() and path.exists():
+        try:
+            import matplotlib.image as mpimg
+
+            image = mpimg.imread(path)
+            watermark_axis = figure.add_axes([0.855, 0.015, 0.125, 0.075], zorder=50)
+            watermark_axis.imshow(image, alpha=0.18)
+            watermark_axis.axis("off")
+        except Exception:
+            watermark_axis = None
+    try:
+        yield
+    finally:
+        if watermark_axis is not None:
+            try:
+                watermark_axis.remove()
+            except Exception:
+                pass
 
 
 def _exportable_frame(data: pd.DataFrame) -> pd.DataFrame:
@@ -88,11 +133,12 @@ def effective_png_dpi(figure, requested_dpi=220, max_side_px=None) -> int:
 def figure_png(figure, dpi=220, max_side_px=None) -> bytes:
     """Render PNG bytes with a publication-grade bounded pixel canvas."""
     buffer = io.BytesIO()
-    figure.savefig(
-        buffer, format="png",
-        dpi=effective_png_dpi(figure, dpi, max_side_px=max_side_px),
-        bbox_inches="tight",
-    )
+    with _temporary_logo_watermark(figure):
+        figure.savefig(
+            buffer, format="png",
+            dpi=effective_png_dpi(figure, dpi, max_side_px=max_side_px),
+            bbox_inches="tight",
+        )
     return buffer.getvalue()
 
 
@@ -119,14 +165,16 @@ def release_figures(figures: Iterable) -> None:
 def figure_pdf(figure) -> bytes:
     """Render a Matplotlib figure to PDF bytes."""
     buffer = io.BytesIO()
-    figure.savefig(buffer, format="pdf", bbox_inches="tight")
+    with _temporary_logo_watermark(figure):
+        figure.savefig(buffer, format="pdf", bbox_inches="tight")
     return buffer.getvalue()
 
 
 def figure_svg(figure) -> bytes:
     """Render a resolution-independent SVG for sharp browser previews."""
     buffer = io.BytesIO()
-    figure.savefig(buffer, format="svg", bbox_inches="tight")
+    with _temporary_logo_watermark(figure):
+        figure.savefig(buffer, format="svg", bbox_inches="tight")
     return buffer.getvalue()
 
 

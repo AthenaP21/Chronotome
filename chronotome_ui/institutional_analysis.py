@@ -12,7 +12,7 @@ from chronotome_core import (
     run_institutional_analysis, run_institutional_community_visualization,
     run_topic_institutional_analysis,
 )
-from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.figure_controls import render_customizable_figure
 
 
 ANALYSIS_LABELS = {
@@ -79,15 +79,11 @@ def _select_dataset():
 
 
 def _render_figure(exports: dict, basename: str, prefix: str):
-    svg, png, pdf = (f"Plots/{basename}.{extension}" for extension in ("svg", "png", "pdf"))
-    if svg not in exports:
-        st.warning("No network figure could be produced for this filtered dataset.")
-        return
-    render_svg(exports[svg])
-    left, middle, right = st.columns(3)
-    left.download_button("Download 600-DPI PNG", exports[png], f"{basename}.png", "image/png", key=f"{prefix}-png")
-    middle.download_button("Download vector SVG", exports[svg], f"{basename}.svg", "image/svg+xml", key=f"{prefix}-svg")
-    right.download_button("Download vector PDF", exports[pdf], f"{basename}.pdf", "application/pdf", key=f"{prefix}-pdf")
+    figure = st.session_state.get("_institutional_current_figures", {}).get(basename)
+    render_customizable_figure(
+        exports, basename, prefix, figure=figure,
+        missing_message="No network figure could be produced for this filtered dataset.",
+    )
 
 
 def _matching_topic_dataset(data: pd.DataFrame):
@@ -115,8 +111,8 @@ def render_institutional_analysis():
         "Global or EU-only, each using all publications, MCP publications, or SCP publications."
     )
     st.info(
-        "Only the analysis selected in the dropdown is computed. Figures retain the notebook's Cividis "
-        "palette, dimensions, spring-layout seed, annotations, legends, and publication-grade exports."
+        "Choose one network scope at a time. Chronotome exports the institutional ranking, "
+        "collaboration graph, network tables, and optional community visualization for that scope."
     )
 
     _section(1, "Select the post-geographic dataset")
@@ -154,17 +150,16 @@ def render_institutional_analysis():
             "- **EU-only — MCP:** international collaboration wholly inside the EU27.\n"
             "- **EU-only — SCP:** domestic papers from one EU27 country."
         )
-    with st.sidebar:
-        st.markdown("### Institutional settings")
-        top_n_plot = st.number_input(
-            "Institutions shown in network", min_value=5, max_value=100, value=30,
-            help="Notebook default: Top 30 institutions by publication volume.", key="institutional-top-n-plot",
-        )
-        max_institutions = st.number_input(
-            "Mega-consortium exclusion threshold", min_value=2, max_value=500, value=50,
-            help="Papers above this institution count are excluded only from edge construction.",
-            key="institutional-max-institutions",
-        )
+    setting_left, setting_right = st.columns(2)
+    top_n_plot = setting_left.number_input(
+        "Institutions shown in network", min_value=5, max_value=100, value=30,
+        help="Top institutions by publication volume.", key="institutional-top-n-plot",
+    )
+    max_institutions = setting_right.number_input(
+        "Mega-consortium exclusion threshold", min_value=2, max_value=500, value=50,
+        help="Papers above this institution count are excluded only from edge construction.",
+        key="institutional-max-institutions",
+    )
     signature = (
         "institutional-v1", dataset_signature, analysis_name,
         int(top_n_plot), int(max_institutions),
@@ -197,6 +192,7 @@ def render_institutional_analysis():
     for warning in result["warnings"]:
         st.warning(warning)
     tables, exports, metadata = result["tables"], result["exports"], result["metadata"]
+    st.session_state["_institutional_current_figures"] = result.get("figures", {})
 
     _section(3, "Institutional overview", ANALYSIS_LABELS[analysis_name])
     c1, c2, c3, c4 = st.columns(4)
@@ -254,6 +250,7 @@ def render_institutional_analysis():
             st.error(f"An unexpected network value stopped community generation: {exc}")
     if cached_community and cached_community.get("signature") == signature:
         community_result = cached_community["result"]
+        st.session_state["_institutional_current_figures"] = community_result.get("figures", {})
         for warning in community_result["warnings"]:
             st.warning(warning)
         community_metadata = community_result["metadata"]
@@ -342,6 +339,7 @@ def render_institutional_analysis():
         topic_result = topic_cache.get(topic_key)
         if topic_result:
             topic_name = topic_result["metadata"]["analysis_name"]
+            st.session_state["_institutional_current_figures"] = topic_result.get("figures", {})
             st.dataframe(topic_result["tables"]["institution_ranking"].head(15), width="stretch", hide_index=True)
             _render_figure(
                 topic_result["exports"], f"Top_10_Institutions_By_Publications_{topic_name}",

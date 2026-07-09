@@ -6,7 +6,8 @@ import pandas as pd
 import streamlit as st
 
 from chronotome_core import run_advanced_analyses
-from chronotome_ui.figure_preview import render_svg
+from chronotome_ui.figure_controls import render_customizable_figure
+from chronotome_ui.navigation import navigate_to_page
 
 
 def _figure_downloads(exports: dict, basename: str, prefix: str):
@@ -30,18 +31,11 @@ def _figure_downloads(exports: dict, basename: str, prefix: str):
 
 def _render_figure(exports: dict, basename: str, prefix: str):
     """Render a sharp vector preview and expose every publication format."""
-    png_path = f"Plots/{basename}.png"
-    svg_path = f"Plots/{basename}.svg"
-    pdf_path = f"Plots/{basename}.pdf"
-    if png_path not in exports:
-        st.warning("The analysis completed, but no figure was produced for the available data.")
-        return
-    if svg_path in exports:
-        render_svg(exports[svg_path])
-    else:
-        st.image(exports[png_path], width="stretch")
-    if svg_path in exports and pdf_path in exports:
-        _figure_downloads(exports, basename, prefix)
+    figure = st.session_state.get("_advanced_current_figures", {}).get(basename)
+    render_customizable_figure(
+        exports, basename, prefix, figure=figure,
+        missing_message="The analysis completed, but no figure was produced for the available data.",
+    )
 
 
 def _section(number: int, title: str, caption: str | None = None):
@@ -92,8 +86,8 @@ def render_advanced_analyses():
     """Render each completed-workflow analysis as an independent opt-in action."""
     st.title("Advanced Analyses and Final Dataset Summary")
     st.markdown(
-        "Choose only the analyses you need. Each section below has its own generation button, retained "
-        "result, and publication-grade downloads. Nothing on this page runs automatically."
+        "Choose the analyses you need. Each section has its own generation button, retained result, "
+        "graph controls, and publication-grade downloads."
     )
     st.info(
         "This phase follows Geographic analysis so its final summary can include international "
@@ -104,8 +98,7 @@ def render_advanced_analyses():
     if geographic_results is None:
         st.warning("Run Geographic analysis before using these completed-workflow analyses.")
         if st.button("Go to geographic analysis", type="primary"):
-            st.session_state["_chronotome_navigate_to"] = "Geographic analysis"
-            st.rerun()
+            navigate_to_page("Geographic analysis")
         return
     data = geographic_results.get("data", pd.DataFrame())
     if data.empty:
@@ -137,9 +130,9 @@ def render_advanced_analyses():
     result = _component_result("summary", "final dataset summary", data, component_results)
     if result:
         tables, exports = result["tables"], result["exports"]
-        st.dataframe(tables["final_main_summary"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["final_main_summary"], width="stretch", hide_index=True)
         st.markdown("#### Document-type snapshot")
-        st.dataframe(tables["document_type_snapshot"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["document_type_snapshot"], width="stretch", hide_index=True)
         st.download_button(
             "Download final summary (CSV)", exports["Results/final_main_summary.csv"],
             "final_main_summary.csv", "text/csv", key="advanced-summary-csv",
@@ -151,9 +144,9 @@ def render_advanced_analyses():
     result = _component_result("articles", "article impact ranking", data, component_results)
     if result:
         tables = result["tables"]
-        st.dataframe(tables["top_10_most_cited_articles"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["top_10_most_cited_articles"], width="stretch", hide_index=True)
         with st.expander("Complete article citation ranking"):
-            st.dataframe(tables["all_articles_ranked_by_citations"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["all_articles_ranked_by_citations"], width="stretch", hide_index=True)
         _common_downloads(result, "articles")
 
     _section(3, "Most influential authors",
@@ -162,9 +155,9 @@ def render_advanced_analyses():
     if result:
         tables = result["tables"]
         st.caption(f"Author field used: {result['author_column'] or 'Unavailable'}")
-        st.dataframe(tables["top_10_authors_by_impact"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["top_10_authors_by_impact"], width="stretch", hide_index=True)
         with st.expander("Complete author impact ranking"):
-            st.dataframe(tables["all_authors_ranked_by_impact"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["all_authors_ranked_by_impact"], width="stretch", hide_index=True)
         _common_downloads(result, "authors")
 
     _section(4, "Bradford's Law of Scattering",
@@ -172,24 +165,25 @@ def render_advanced_analyses():
     result = _component_result("bradford", "Bradford scattering analysis", data, component_results)
     if result:
         tables, exports = result["tables"], result["exports"]
-        st.dataframe(tables["bradford_zone_summary"], use_container_width=True, hide_index=True)
+        st.session_state["_advanced_current_figures"] = result.get("figures", {})
+        st.dataframe(tables["bradford_zone_summary"], width="stretch", hide_index=True)
         _render_figure(exports, "bradford_law_scattering", "advanced-bradford")
         with st.expander("Complete Bradford source table"):
-            st.dataframe(tables["bradford_law_data"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["bradford_law_data"], width="stretch", hide_index=True)
         _common_downloads(result, "bradford")
 
     _section(5, "Emerging research fronts",
-             "Finds highly cited recent papers using the notebook's rolling publication window.")
+             "Finds highly cited recent papers using a rolling recent-publication window.")
     result = _component_result("hot", "hot-paper analysis", data, component_results)
     if result:
         tables = result["tables"]
-        st.caption(f"Notebook recent-paper window: {result['recent_year']}–present")
+        st.caption(f"Recent-paper window: {result['recent_year']}–present")
         if tables["top_10_hot_papers"].empty:
             st.info("No papers fall inside the recent-paper window.")
         else:
-            st.dataframe(tables["top_10_hot_papers"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["top_10_hot_papers"], width="stretch", hide_index=True)
         with st.expander("Complete recent-paper ranking"):
-            st.dataframe(tables["emerging_research_fronts_hot_papers"], use_container_width=True, hide_index=True)
+            st.dataframe(tables["emerging_research_fronts_hot_papers"], width="stretch", hide_index=True)
         _common_downloads(result, "hot")
 
     _section(6, "Collaboration size versus citation impact",
@@ -197,7 +191,8 @@ def render_advanced_analyses():
     result = _component_result("team", "team-science analysis", data, component_results)
     if result:
         tables, exports = result["tables"], result["exports"]
-        st.dataframe(tables["collaboration_impact_team_size"], use_container_width=True, hide_index=True)
+        st.session_state["_advanced_current_figures"] = result.get("figures", {})
+        st.dataframe(tables["collaboration_impact_team_size"], width="stretch", hide_index=True)
         _render_figure(exports, "collaboration_impact_team_size", "advanced-team")
         _common_downloads(result, "team")
 
@@ -206,11 +201,11 @@ def render_advanced_analyses():
     result = _component_result("landscape", "journal landscape", data, component_results)
     if result:
         tables, exports = result["tables"], result["exports"]
+        st.session_state["_advanced_current_figures"] = result.get("figures", {})
         _render_figure(exports, "journal_landscape_cividis", "advanced-landscape")
-        st.dataframe(tables["journal_landscape_data"], use_container_width=True, hide_index=True)
+        st.dataframe(tables["journal_landscape_data"], width="stretch", hide_index=True)
         _common_downloads(result, "landscape")
 
     st.markdown("---")
     if st.button("Continue to thematic analysis", type="primary", key="advanced-to-thematic"):
-        st.session_state["_chronotome_navigate_to"] = "Thematic analysis"
-        st.rerun()
+        navigate_to_page("Thematic analysis")

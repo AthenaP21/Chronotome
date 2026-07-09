@@ -2,6 +2,8 @@
 
 import streamlit as st
 
+from chronotome_ui.navigation import navigate_to_page
+
 
 def render_home():
     """Render project context, outputs, archive information, and citation."""
@@ -21,10 +23,10 @@ def render_home():
         st.write("PRISMA-style counts from identification through deduplication to the included dataset.")
     with third:
         st.markdown("#### Reproducible analyses")
-        st.write("Country, journal, impact, thematic, and collaboration analyses with publication-ready Cividis figures.")
+        st.write("Country, journal, impact, thematic, and collaboration analyses with publication-grade figures.")
 
     st.info(
-        "**New to bibliometrics?** Start with Data ingestion. The app replaces notebook paths "
+        "**New to bibliometrics?** Start with Data ingestion. Chronotome replaces local file paths "
         "and code switches with guided controls, validation messages, and downloads."
     )
 
@@ -39,7 +41,7 @@ def render_home():
     archive, resource = st.columns([1, 1])
     with archive:
         st.markdown("### What the archive contains")
-        st.write("The notebook and supporting resources used by the reproducible pipeline.")
+        st.write("The reproducible workflow and supporting resources.")
     with resource:
         st.markdown("### Curated entity resolution")
         st.write(
@@ -56,5 +58,4 @@ def render_home():
 
     st.divider()
     if st.button("Start data ingestion", type="primary"):
-        st.session_state["_chronotome_navigate_to"] = "Data ingestion"
-        st.rerun()
+        navigate_to_page("Data ingestion")

@@ -11,9 +11,27 @@ from chronotome_ui.advanced_analyses import render_advanced_analyses
 from chronotome_ui.thematic_analysis import render_thematic_analysis
 from chronotome_ui.institutional_analysis import render_institutional_analysis
 from chronotome_ui.full_workflow import render_full_workflow
+from chronotome_ui.branding import apply_brand_theme, render_sidebar_brand
+from chronotome_ui.dataframe_display import install_safe_dataframe_display
 from chronotome_ui.navigation import scroll_to_top
 
+WORKFLOW_PAGES = [
+    "Home", "Data ingestion", "Entity resolution", "Corpus & production",
+    "Geographic analysis", "Advanced analyses", "Thematic analysis",
+    "Institutional analysis", "Full workflow",
+]
+
+
+def _sidebar_page_changed() -> None:
+    """Scroll only when the user deliberately changes workflow pages."""
+    st.session_state["_chronotome_scroll_top"] = True
+
+
 st.set_page_config(page_title="Chronotome", page_icon="⏳", layout="wide")
+install_safe_dataframe_display()
+apply_brand_theme()
+top_scroll_mount = st.empty()
+st.markdown('<span id="chronotome-page-top"></span>', unsafe_allow_html=True)
 
 if "chronotome_page" not in st.session_state:
     st.session_state["chronotome_page"] = "Home"
@@ -22,21 +40,14 @@ if requested_page:
     st.session_state["chronotome_page"] = requested_page
 
 with st.sidebar:
-    st.title("Chronotome")
+    render_sidebar_brand()
     page = st.radio(
-        "Workflow", ["Home", "Data ingestion", "Entity resolution", "Corpus & production",
-                     "Geographic analysis", "Advanced analyses", "Thematic analysis",
-                     "Institutional analysis", "Full workflow"],
+        "Workflow", WORKFLOW_PAGES,
         key="chronotome_page",
+        on_change=_sidebar_page_changed,
     )
-    st.caption("Scopus + Web of Science · No OpenAlex integration")
 
-should_scroll_top = (
-    st.session_state.pop("_chronotome_scroll_top", False)
-    or st.session_state.get("_chronotome_last_page") != page
-)
-if should_scroll_top:
-    st.session_state["_chronotome_last_page"] = page
+should_scroll_top = st.session_state.pop("_chronotome_scroll_top", False)
 
 if page == "Home":
     render_home()
@@ -58,4 +69,5 @@ else:
     render_full_workflow()
 
 if should_scroll_top:
-    scroll_to_top(token=page)
+    with top_scroll_mount:
+        scroll_to_top(token=page)
