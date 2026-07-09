@@ -8,7 +8,7 @@ import streamlit as st
 from chronotome_core import run_country_case_study, run_geographic_bibliometrics
 from chronotome_ui.figure_controls import render_customizable_figure
 from chronotome_ui.figure_preview import render_svg
-from chronotome_ui.navigation import navigate_to_page, request_scroll_to_top
+from chronotome_ui.navigation import navigate_to_page
 from chronotome_ui.state import clear_downstream_state
 
 
@@ -89,7 +89,6 @@ def _render_country_case_study(case_result: dict):
         st.session_state["country_selector_epoch"] = st.session_state.get("country_selector_epoch", 0) + 1
         st.session_state.pop("geographic_case_result", None)
         st.session_state.pop("geographic_case_token", None)
-        request_scroll_to_top()
 
     st.title(f"Country Case Study: {country}")
     st.caption("Temporal dashboard and statistical field guide")
@@ -192,7 +191,6 @@ def _render_country_case_study(case_result: dict):
         st.session_state["country_selector_epoch"] = st.session_state.get("country_selector_epoch", 0) + 1
         st.session_state.pop("geographic_case_result", None)
         st.session_state.pop("geographic_case_token", None)
-        request_scroll_to_top()
 def render_geographic_analysis():
     """Render country collaboration, impact, and network analyses."""
     if (
@@ -295,6 +293,12 @@ def render_geographic_analysis():
             "Spring-layout iterations", min_value=25, max_value=1000, value=250, step=25,
             help="Lower this for faster rendering on very large networks.", key="geo_network_iterations",
         )
+    generate_analysis = st.button(
+        "Generate geographic analysis",
+        type="primary",
+        disabled=data is None,
+        key="generate-geographic-analysis",
+    )
     analysis_signature = (
         "svg-preview-v1", dataset_signature, int(collaboration_top_n), int(impact_top_n),
         int(min_papers), bool(exclude_unknown), int(advanced_min_publications),
@@ -303,7 +307,7 @@ def render_geographic_analysis():
 
     results = st.session_state.get("geographic_analysis_results")
     current = results is not None and st.session_state.get("geographic_analysis_signature") == analysis_signature
-    if data is not None and not current:
+    if generate_analysis and data is not None:
         try:
             with st.spinner("Classifying SCP/MCP records and rendering publication-grade country figures…"):
                 result = run_geographic_bibliometrics(
@@ -329,6 +333,8 @@ def render_geographic_analysis():
             st.error(f"An unexpected country value stopped geographic analysis: {exc}")
 
     if not current:
+        if data is not None:
+            st.info("Set the analysis options above, then select Generate geographic analysis to create the results.")
         return
     for warning in results["warnings"]:
         st.warning(warning)
@@ -478,7 +484,6 @@ def render_geographic_analysis():
                     st.session_state["geographic_case_result"] = case_result
                     st.session_state["geographic_case_token"] = case_token
                     st.session_state["geographic_view"] = "case"
-                    st.session_state["_chronotome_scroll_top"] = True
                 st.rerun()
             except (ValueError, KeyError) as exc:
                 st.error(f"The {selected_country} case study could not run: {exc}")

@@ -4,25 +4,40 @@ Chronotome is a Streamlit conversion of the original reproducible Jupyter/Kaggle
 
 ## Run locally
 
+Chronotome is installable as a local Python package. Python 3.11 is recommended.
+
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
+git clone https://github.com/AthenaP21/Chronotome.git
+cd Chronotome
+python3.11 -m venv .venv
+source .venv/bin/activate              # Windows: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install --only-binary=:all: .
+chronotome
 ```
 
-No notebook interface or local data paths are required. All uploaded and generated files are handled in memory.
+The `chronotome` command starts the app at `http://127.0.0.1:8501`; it is deliberately limited to the local machine. Use `chronotome --port 8502` if port 8501 is already occupied. For local development, the familiar command remains available:
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py --server.address 127.0.0.1
+```
+
+No notebook interface or local data paths are required. All uploaded and generated files are handled in memory. See the in-app **Local installation** page and [SECURITY.md](SECURITY.md) for the installation and release-safety guidance.
 
 ## App pages
 
 - **Home** introduces Chronotome, its expected outputs, the Zenodo open-science release, the bundled institution aliases, and the suggested citation.
 - **Data ingestion** provides separate Scopus and WoS configuration, Single file and Appendage modes, upload verification, deterministic preprocessing, schema harmonization, deduplication, textual PRISMA reporting, and final CSV/Excel/ZIP downloads.
 - **Entity resolution** explodes affiliations, standardizes institutions and countries, accepts the bundled or an uploaded `institutions.json`, reports alias conflicts and unresolved geography, and exports affiliation/article-level tables.
-- **Corpus & production** automatically analyzes the current entity-resolved article summary and reproduces notebook sections 9 and 11–16: corpus characteristics, internal MNCS, document typology, author productivity/contribution, annual growth, citation dynamics, and local journal/source impact.
-- **Geographic analysis** automatically analyzes the current MNCS-enriched corpus and reproduces notebook Sections 17–18 and 20–21: country distribution, SCP/MCP collaboration, country MNCS, citation prestige, the productivity-impact matrix, the international collaboration network, and clickable country case studies.
+- **Corpus & production** uses the current entity-resolved article summary and starts only when **Generate corpus analysis** is selected. It reproduces notebook sections 9 and 11–16: corpus characteristics, internal MNCS, document typology, author productivity/contribution, annual growth, citation dynamics, and local journal/source impact.
+- **Geographic analysis** starts only when **Generate geographic analysis** is selected. It reproduces notebook Sections 17–18 and 20–21: country distribution, SCP/MCP collaboration, country MNCS, citation prestige, the productivity-impact matrix, the international collaboration network, and clickable country case studies.
 - **Advanced analyses** runs after the geographic phase and produces the final paper-ready dataset summary, article and author impact rankings, Bradford scattering, hot papers, team-size impact, and the journal landscape.
 - **Thematic analysis** uses the current geographic dataset or prepares one uploaded Chronotome dataset in the background. It provides staged NLTK setup, optional query-term removal, visible editable noise-list categories, 1–4 gram extraction and word clouds, automatic LDA/NMF topic selection, longitudinal topic evolution, topic impact/co-occurrence, canonical papers, and country specialization.
-- **Institutional analysis** uses the current geographic dataset or the unchanged `article_summary_with_country_classification` handoff file. A six-option dropdown generates one Global/EU × All/MCP/SCP network at a time, with publication rankings, collaboration maps, on-demand Cividis community visualizations, GraphML/CSV/Excel exports, and optional topic-specific networks.
+- **Institutional analysis** uses the current geographic dataset or the unchanged `article_summary_with_country_classification` handoff file. Choose one Global/EU × All/MCP/SCP scope and select **Generate institutional network** to create it. Completed scopes can be compared side by side using their original network graphs; the page also offers community visualizations, GraphML/CSV/Excel exports, and optional topic-specific networks.
 - **Full workflow** provides a single **Run all workflow** action. It starts from raw Scopus/WoS files or the current ingestion result, executes every modern stage through all six institutional community visualizations, and returns one structured ZIP containing the workflow's Excel files, plots, network exports, and manifest.
   The background runner streams stage artifacts directly into the master archive, releases completed figures and graphs, avoids nested ZIP/dataset duplication, and records process-memory usage after every stage.
+- **Local installation** is a step-by-step guide to installing, launching, updating, and securing Chronotome on your own computer.
 
 ## Input files
 
@@ -64,7 +79,6 @@ The Streamlit app preserves the notebook's current methods:
 - country productivity, collaboration, impact, and temporal tables
 - Global and EU-only institutional networks for All, MCP, and SCP records
 - optional topic-level institutional collaboration networks after LDA modeling
-- opt-in, auto-scaled K-fold centrality robustness, Louvain community stability, and configuration-model significance testing
 - one-click background execution from ingestion through six institutional community visualizations, with a consolidated non-nested ZIP package
 - unigram, bigram, trigram, quadgram, LDA/NMF evaluation, topic-assignment, and topic-evolution tables
 - CSV, Excel, 600-DPI PNG, vector SVG/PDF, and complete ZIP exports

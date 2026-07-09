@@ -4,6 +4,7 @@ import io
 import json
 import zipfile
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import patch
 
 import pandas as pd
@@ -26,6 +27,7 @@ from chronotome_core.preprocessing import (
     clean_scopus_authors, clean_wos_authors, remove_id_codes_from_full_names,
     scopus_cited_reference_count, wos_cited_reference_count,
 )
+from chronotome import cli as chronotome_cli
 
 
 class Upload(io.BytesIO):
@@ -38,6 +40,23 @@ class JsonUpload(io.BytesIO):
     def __init__(self, data, name="institutions.json"):
         super().__init__(json.dumps(data).encode())
         self.name = name
+
+
+class ChronotomeLocalLauncherTest(unittest.TestCase):
+    def test_launcher_forces_loopback_without_shell_execution(self):
+        with patch("chronotome.cli.subprocess.call", return_value=0) as launch:
+            exit_code = chronotome_cli.main(["--port", "8601", "--no-browser"])
+
+        self.assertEqual(exit_code, 0)
+        command = launch.call_args.args[0]
+        self.assertIn("--server.address=127.0.0.1", command)
+        self.assertIn("--server.port=8601", command)
+        self.assertIn("--server.headless=true", command)
+        self.assertNotIn("0.0.0.0", " ".join(command))
+
+    def test_launcher_rejects_unrecognised_streamlit_arguments(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            chronotome_cli.main(["--server.address=0.0.0.0"])
 
 
 class ChronotomeSmokeTest(unittest.TestCase):
