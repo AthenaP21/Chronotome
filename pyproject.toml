@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68,<82"]
+requires = ["setuptools>=77.0.3,<82"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,12 @@ name = "chronotome"
 version = "0.1.0"
 description = "A reproducible local bibliometric workflow for Scopus and Web of Science exports."
 readme = "README.md"
+authors = [
+    { name = "L.-E. Popescu-Apreutesei" },
+    { name = "M.-S. Iosupescu" },
+]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.13"
 keywords = ["bibliometrics", "scientometrics", "streamlit", "research"]
 classifiers = [
