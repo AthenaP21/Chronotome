@@ -12,7 +12,9 @@ from chronotome_core import (
     run_institutional_analysis, run_institutional_community_visualization,
     run_topic_institutional_analysis,
 )
+from chronotome_core.runner import DEFAULT_CONFIG
 from chronotome_ui.figure_controls import render_customizable_figure
+from chronotome_ui.figure_preview import render_svg
 
 
 ANALYSIS_LABELS = {
@@ -59,7 +61,7 @@ def _select_dataset():
     upload = st.file_uploader(
         "Upload `article_summary_with_country_classification.csv` or `.xlsx`",
         type=["csv", "xlsx", "xls"], key="institutional-handoff-upload",
-        help="Use the file exported by Geographic Analysis; the basename is intentionally unchanged.",
+        help="Use the file exported by Geographic Analysis with its original filename.",
     )
     if upload is None:
         return None, None
@@ -84,6 +86,82 @@ def _render_figure(exports: dict, basename: str, prefix: str):
         exports, basename, prefix, figure=figure,
         missing_message="No network figure could be produced for this filtered dataset.",
     )
+
+
+def _network_svg_export(entry: dict, analysis_name: str) -> bytes | None:
+    """Return the exported primary network SVG for a completed scope."""
+    result = entry.get("result", {})
+    exports = result.get("exports", {})
+    suffix = f"_{analysis_name}.svg"
+    candidates = sorted(
+        path for path in exports
+        if path.startswith("Plots/Collaboration_Network_Top_") and path.endswith(suffix)
+    )
+    return exports[candidates[0]] if candidates else None
+
+
+def _matches_dataset(entry: dict, dataset_signature) -> bool:
+    """Recognize current and pre-comparison cache entries for this corpus."""
+    if not isinstance(entry, dict):
+        return False
+    if "dataset_signature" in entry:
+        return entry["dataset_signature"] == dataset_signature
+    signature = entry.get("signature", ())
+    return len(signature) > 1 and signature[1] == dataset_signature
+
+
+def _render_network_comparison(cache: dict, dataset_signature, *, section_number: int = 6) -> None:
+    """Show two already-generated network figures without rerunning analyses."""
+    _section(
+        section_number,
+        "Compare two institutional networks",
+        "Choose two completed scopes. The comparison preserves each network's original layout and styling.",
+    )
+    comparable = {
+        name: entry
+        for name, entry in cache.items()
+        if _matches_dataset(entry, dataset_signature)
+        and _network_svg_export(entry, name) is not None
+    }
+    if len(comparable) < 2:
+        st.caption("Generate two institutional scopes to compare their network figures side by side.")
+        return
+    options = list(comparable)
+    controls_left, controls_right = st.columns(2)
+    with controls_left:
+        left_name = st.selectbox(
+            "First network",
+            options,
+            format_func=lambda key: ANALYSIS_LABELS[key],
+            key="institutional-compare-left",
+        )
+    with controls_right:
+        right_default = 1 if len(options) > 1 else 0
+        right_name = st.selectbox(
+            "Second network",
+            options,
+            index=right_default,
+            format_func=lambda key: ANALYSIS_LABELS[key],
+            key="institutional-compare-right",
+        )
+
+    if left_name == right_name:
+        st.info("Choose two different scopes to compare their networks.")
+        return
+
+    left_figure = _network_svg_export(comparable[left_name], left_name)
+    right_figure = _network_svg_export(comparable[right_name], right_name)
+    if left_figure is None or right_figure is None:
+        st.warning("One selected scope has no collaboration network figure to compare.")
+        return
+
+    # Intentionally render only the original network figures here: no tables,
+    # metrics, downloads, or style controls are included in the comparison.
+    figure_left, figure_right = st.columns(2)
+    with figure_left:
+        render_svg(left_figure)
+    with figure_right:
+        render_svg(right_figure)
 
 
 def _matching_topic_dataset(data: pd.DataFrame):
@@ -152,11 +230,13 @@ def render_institutional_analysis():
         )
     setting_left, setting_right = st.columns(2)
     top_n_plot = setting_left.number_input(
-        "Institutions shown in network", min_value=5, max_value=100, value=30,
+        "Institutions shown in network", min_value=5, max_value=100,
+        value=int(DEFAULT_CONFIG["institutional_top_n_plot"]),
         help="Top institutions by publication volume.", key="institutional-top-n-plot",
     )
     max_institutions = setting_right.number_input(
-        "Mega-consortium exclusion threshold", min_value=2, max_value=500, value=50,
+        "Mega-consortium exclusion threshold", min_value=2, max_value=500,
+        value=int(DEFAULT_CONFIG["max_institutions_per_paper"]),
         help="Papers above this institution count are excluded only from edge construction.",
         key="institutional-max-institutions",
     )
@@ -167,7 +247,7 @@ def render_institutional_analysis():
     cache = st.session_state.setdefault("institutional-analysis-cache", {})
     cached = cache.get(analysis_name)
     current = cached is not None and cached.get("signature") == signature
-    if not current:
+    if st.button("Generate institutional network", type="primary", key="generate-institutional-network"):
         try:
             with st.spinner(f"Building {ANALYSIS_LABELS[analysis_name]} institutional outputs…"):
                 result = run_institutional_analysis(
@@ -175,9 +255,15 @@ def render_institutional_analysis():
                     top_n_plot=int(top_n_plot),
                     max_institutions_per_paper=int(max_institutions),
                 )
-            cache[analysis_name] = {"signature": signature, "result": result}
-            for cached_name in list(cache):
-                if cached_name != analysis_name:
+            cache[analysis_name] = {
+                "signature": signature,
+                "dataset_signature": dataset_signature,
+                "result": result,
+            }
+            # Keep completed scopes for visual comparison, but never retain
+            # results from a different post-geographic corpus in session.
+            for cached_name, cached_entry in list(cache.items()):
+                if not _matches_dataset(cached_entry, dataset_signature):
                     cache.pop(cached_name, None)
             current = True
         except (ValueError, KeyError) as exc:
@@ -185,6 +271,8 @@ def render_institutional_analysis():
         except Exception as exc:
             st.error(f"An unexpected institution value stopped the analysis: {exc}")
     if not current:
+        _render_network_comparison(cache, dataset_signature, section_number=3)
+        st.caption("Choose a scope and settings, then select Generate institutional network.")
         return
     result = cache[analysis_name]["result"]
     st.session_state["institutional-active-signature"] = signature
@@ -221,11 +309,13 @@ def render_institutional_analysis():
     else:
         st.warning("This scope contains no multi-institution edges to draw.")
 
-    _section(6, "Community visualization (optional)",
+    _render_network_comparison(cache, dataset_signature)
+
+    _section(7, "Community visualization (optional)",
              "Color = community; node size = full-network collaboration strength; dark edges = within-community ties.")
     community_cache = st.session_state.setdefault("institutional-community-cache", {})
     cached_community = community_cache.get(analysis_name)
-    st.caption("This runs deterministic weighted Louvain community detection for the selected network.")
+    st.caption("This runs weighted Louvain community detection for the selected network.")
     button_label = "Regenerate communities :D" if cached_community else "Generate communities :D"
     if metadata["network_edges"] == 0:
         st.caption("Community detection requires at least one collaboration edge.")
@@ -283,7 +373,7 @@ def render_institutional_analysis():
             key=f"community-xlsx-{analysis_name}",
         )
 
-    _section(7, "Network and collaboration data")
+    _section(8, "Network and collaboration data")
     with st.expander("Collaboration pair counts", expanded=True):
         st.dataframe(tables["collaboration_counts"].head(250), width="stretch", hide_index=True)
     left, right = st.columns(2)
@@ -294,7 +384,7 @@ def render_institutional_analysis():
         st.markdown("#### Network edges")
         st.dataframe(tables["network_edges"].head(250), width="stretch", hide_index=True)
 
-    _section(8, "Downloads", "Every selected scope has its own complete, reproducible output package.")
+    _section(9, "Downloads", "Every selected scope has its own complete, reproducible output package.")
     archive = f"chronotome_institutional_{analysis_name}_outputs.zip"
     workbook = f"Results/Institutional_Analysis_{analysis_name}.xlsx"
     left, right = st.columns(2)
@@ -312,7 +402,7 @@ def render_institutional_analysis():
         "application/graphml+xml",
     )
 
-    _section(9, "Thematic–institutional networks (optional)",
+    _section(10, "Thematic–institutional networks (optional)",
              "Build a separate institutional network for one LDA topic only when final thematic results match this corpus.")
     topic_data = _matching_topic_dataset(data)
     if topic_data is None:

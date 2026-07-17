@@ -37,7 +37,7 @@ def render_entity_resolution():
     """Render dataset selection, JSON validation, resolution, audits, and exports."""
     st.title("Institutional and Geographic Entity Resolution")
     st.markdown(
-        "Transform raw affiliation strings into canonical institutions and ISO-consistent countries, "
+        "Transform raw affiliation strings into standardized institutions and consistent country names, "
         "then attach unique institution/country lists and collaboration types to each article."
     )
     st.info(
@@ -95,7 +95,7 @@ def render_entity_resolution():
     if alias_choice.startswith("Upload"):
         alias_upload = st.file_uploader(
             "Upload institutions.json", type=["json"], key="institution_alias_upload",
-            help="Expected structure: canonical institution name → list of aliases.",
+            help="Expected structure: standardized institution name mapped to a list of aliases.",
         )
         if not alias_upload:
             st.info("Upload the updated JSON to validate it before entity resolution.")
@@ -116,9 +116,9 @@ def render_entity_resolution():
                 )
             with st.expander("How custom alias maps are merged with the backup"):
                 st.write(
-                    "The selected JSON is authoritative. Chronotome loads its canonical names and aliases first. "
-                    "The embedded backup may add aliases only for canonicals already present in that JSON; backup-only "
-                    "canonical institutions are ignored. Conflicting keys retain the first JSON mapping and are reported."
+                    "Chronotome loads the institution names and aliases from the selected JSON. "
+                    "The bundled map may add aliases only for institutions already present in that file. "
+                    "Conflicting aliases retain the first mapping and are reported."
                 )
         except ValueError as exc:
             st.error(str(exc))
@@ -202,7 +202,7 @@ def render_entity_resolution():
             st.success("No alias collisions were detected.")
         else:
             st.dataframe(results["alias_info"]["collisions"], width="stretch", hide_index=True)
-        with st.expander("Backup canonicals ignored because they were absent from the selected JSON"):
+        with st.expander("Bundled institutions not present in the selected JSON"):
             st.dataframe(results["alias_info"]["backup_ignored"], width="stretch", hide_index=True)
     with downloads_tab:
         exports = results["exports"]

@@ -30,9 +30,7 @@ _GROUPS = {
     "institutional": (
         "institutional-analysis-cache", "institutional-analysis-results",
         "institutional-active-signature", "institutional-topic-cache",
-        "institutional-community-cache", "institutional-validation-source",
-        "institutional-validation-result", "institutional-validation-token",
-        "institutional-view",
+        "institutional-community-cache", "institutional-view",
     ),
     "full": (
         "full_workflow_results", "full_workflow_signature",

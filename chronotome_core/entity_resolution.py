@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pycountry
 
@@ -25,6 +26,20 @@ COUNTRY_ALIASES = {
     "BOSNIA & HERCEG": "Bosnia and Herzegovina", "BOSNIA & HERCEGOVINA": "Bosnia and Herzegovina",
     "BRUNEI": "Brunei", "DOMINICAN REP": "Dominican Republic", "SOUTH KOREA": "South Korea",
     "KOREA": "South Korea", "REP OF KOREA": "South Korea",
+    "CZECH REPUBLIC": "Czechia", "CZECH REP.": "Czechia", "CZECHIA": "Czechia",
+}
+
+COUNTRY_CANONICAL_ALIASES = {
+    "czech republic": "Czechia",
+    "czech rep.": "Czechia",
+    "czechia": "Czechia",
+    "türkiye": "Republic of Türkiye",
+    "turkiye": "Republic of Türkiye",
+    "republic of türkiye": "Republic of Türkiye",
+    "republic of turkiye": "Republic of Türkiye",
+    "korea, republic of": "South Korea",
+    "republic of korea": "South Korea",
+    "south korea": "South Korea",
 }
 
 INSTITUTION_ALIASES_BACKUP = {
@@ -354,6 +369,40 @@ def extract_country(affiliation):
     return parts[-1] if len(parts) > 1 else None
 
 
+def canonicalize_country_name(value, stats: ResolutionStats | None = None):
+    """Resolve one country and apply Chronotome's canonical display aliases."""
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and missing:
+        return None
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    direct = COUNTRY_CANONICAL_ALIASES.get(candidate.casefold())
+    if direct:
+        return direct
+    upper = candidate.upper()
+    if upper in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[upper]
+    try:
+        resolved = pycountry.countries.lookup(candidate).name
+    except LookupError:
+        cleaned = re.sub(r"[^A-Z ]", "", upper.replace("&", "AND")).strip()
+        if cleaned in COUNTRY_ALIASES:
+            return COUNTRY_ALIASES[cleaned]
+        try:
+            resolved = pycountry.countries.lookup(cleaned).name
+        except LookupError:
+            if stats is not None:
+                stats.unresolved_countries[candidate] += 1
+            return None
+    return COUNTRY_CANONICAL_ALIASES.get(resolved.casefold(), resolved)
+
+
 def unify_country_alias(raw_string, stats: ResolutionStats):
     if not raw_string:
         return None
@@ -362,19 +411,7 @@ def unify_country_alias(raw_string, stats: ResolutionStats):
     candidate = re.sub(r"\b\d{5}(?:-\d{4})?\b", "", candidate)
     candidate = re.sub(r"[,\-]", " ", candidate)
     candidate = re.sub(r"\s{2,}", " ", candidate).strip()
-    if candidate in COUNTRY_ALIASES:
-        return COUNTRY_ALIASES[candidate]
-    try:
-        return pycountry.countries.lookup(candidate).name
-    except LookupError:
-        cleaned = re.sub(r"[^A-Z ]", "", candidate.replace("&", "AND")).strip()
-        try:
-            return pycountry.countries.lookup(cleaned).name
-        except LookupError:
-            if cleaned in COUNTRY_ALIASES:
-                return COUNTRY_ALIASES[cleaned]
-            stats.unresolved_countries[str(raw_string).strip()] += 1
-            return None
+    return canonicalize_country_name(candidate, stats)
 
 
 def _counter_table(counter: Counter, item_name: str, limit=None) -> pd.DataFrame:
@@ -444,7 +481,7 @@ def resolve_entities(data: pd.DataFrame, alias_json_file=None) -> dict:
     ], columns=["Entity-resolution measure", "Value"])
     return {
         "article_summary": article_summary, "affiliations": affiliation_table,
-        "all_exploded_affiliations": exploded, "alias_info": alias_info,
+        "alias_info": alias_info,
         "audit": {
             "summary": summary,
             "abbreviations": _counter_table(stats.abbreviations, "Abbreviation expansion"),

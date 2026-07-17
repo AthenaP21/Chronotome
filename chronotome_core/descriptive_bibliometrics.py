@@ -14,6 +14,8 @@ import pandas as pd
 from scipy import stats
 from cycler import cycler
 
+from .preprocessing import author_source_counts, select_author_text
+
 
 DOC_TYPE_MAP = {
     "article": "Article", "journal article": "Article",
@@ -102,28 +104,88 @@ def corpus_characteristics(data: pd.DataFrame) -> tuple[dict, pd.DataFrame, list
 
 
 def add_internal_mncs(data: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    """Add internal year-normalized citations exactly as defined in the notebook."""
+    """Add the corpus-internal year-normalized citation score (MNCS).
+
+    The reference set for a paper is the retained Chronotome corpus in the
+    same publication year.  A zero-mean reference set cannot define a ratio,
+    so those papers retain a missing MNCS rather than receiving an invented
+    baseline or score.
+    """
     result = data.copy()
     warnings = []
     if "Publication Year" in result and "Cited by" in result:
-        result["Publication Year"] = pd.to_numeric(result["Publication Year"], errors="coerce")
-        result["Cited by"] = pd.to_numeric(result["Cited by"], errors="coerce").fillna(0)
-        year_averages = result.groupby("Publication Year")["Cited by"].mean().to_dict()
-
-        def calculate_mncs(row):
-            baseline = year_averages.get(row["Publication Year"], 1)
-            if pd.isna(baseline) or baseline == 0:
-                baseline = 1
-            return row["Cited by"] / baseline
-
-        result["MNCS"] = result.apply(calculate_mncs, axis=1)
-        baselines = pd.DataFrame(sorted(year_averages.items()), columns=["Publication Year", "Average Citations (Baseline)"])
+        publication_year = pd.to_numeric(result["Publication Year"], errors="coerce")
+        citations = pd.to_numeric(result["Cited by"], errors="coerce")
+        result["Publication Year"] = publication_year
+        result["Cited by"] = citations
+        valid_reference_rows = publication_year.notna() & citations.notna()
+        year_stats = (
+            pd.DataFrame({
+                "Publication Year": publication_year[valid_reference_rows],
+                "Citations": citations[valid_reference_rows],
+            })
+            .groupby("Publication Year", sort=True)["Citations"]
+            .agg(["size", "mean", "median", "sum"])
+        )
+        baseline = publication_year.map(year_stats["mean"] if not year_stats.empty else {})
+        reference_size = publication_year.map(year_stats["size"] if not year_stats.empty else {})
+        defined = (
+            publication_year.notna()
+            & citations.notna()
+            & baseline.notna()
+            & baseline.gt(0)
+        )
+        result["MNCS_Baseline_Citations"] = baseline
+        result["MNCS_Reference_Set_Size"] = reference_size.astype("Int64")
+        result["MNCS_Defined"] = defined.astype(bool)
+        result["MNCS"] = np.where(defined, citations / baseline, np.nan)
+        baselines = year_stats.rename(columns={
+            "size": "Reference Set Size",
+            "mean": "Average Citations (Baseline)",
+            "median": "Median Citations",
+            "sum": "Total Citations",
+        }).reset_index()
+        if not baselines.empty:
+            baselines["Zero-mean reference year"] = baselines["Average Citations (Baseline)"].eq(0)
+        zero_mean_years = int(
+            baselines.get("Zero-mean reference year", pd.Series(dtype=bool)).sum()
+        )
+        if zero_mean_years:
+            warnings.append(
+                f"MNCS is undefined for papers in {zero_mean_years} publication year(s) "
+                "whose retained-corpus mean citation count is zero."
+            )
     else:
-        result["MNCS"] = 1.0
-        baselines = pd.DataFrame(columns=["Publication Year", "Average Citations (Baseline)"])
-        warnings.append("Publication Year or Cited by is missing; MNCS was set to the notebook fallback of 1.0.")
-    preview_columns = [column for column in ["Title", "Publication Year", "Cited by", "MNCS"] if column in result]
+        result["MNCS_Baseline_Citations"] = np.nan
+        result["MNCS_Reference_Set_Size"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+        result["MNCS_Defined"] = False
+        result["MNCS"] = np.nan
+        baselines = pd.DataFrame(columns=[
+            "Publication Year", "Reference Set Size", "Average Citations (Baseline)",
+            "Median Citations", "Total Citations", "Zero-mean reference year",
+        ])
+        warnings.append(
+            "Publication Year or Cited by is missing; corpus-internal year-normalized "
+            "citation scores are undefined."
+        )
     return result, baselines, warnings
+
+
+def mncs_audit_table(data: pd.DataFrame) -> pd.DataFrame:
+    """Summarize the defined and undefined MNCS reference-set cases."""
+    missing = pd.Series(np.nan, index=data.index, dtype=float)
+    years = pd.to_numeric(data.get("Publication Year", missing), errors="coerce")
+    citations = pd.to_numeric(data.get("Cited by", missing), errors="coerce")
+    defined = data.get("MNCS_Defined", pd.Series(False, index=data.index)).fillna(False).astype(bool)
+    baselines = pd.to_numeric(data.get("MNCS_Baseline_Citations", missing), errors="coerce")
+    zero_mean_rows = years.notna() & citations.notna() & baselines.eq(0)
+    return pd.DataFrame([
+        ("Papers with defined MNCS", int(defined.sum())),
+        ("Papers missing publication year", int(years.isna().sum())),
+        ("Papers missing citation values", int(citations.isna().sum())),
+        ("Papers in zero-mean publication years", int(zero_mean_rows.sum())),
+        ("Zero-mean publication years", int(years[zero_mean_rows].nunique())),
+    ], columns=["MNCS audit measure", "Records"])
 
 
 def normalize_doc_type(doc_type_str) -> str:
@@ -171,22 +233,22 @@ def document_type_analysis(data: pd.DataFrame):
 def author_analysis(data: pd.DataFrame, top_n=10):
     """Compute full/fractional author metrics and reproduce both author figures."""
     warnings = []
-    author_column = None
-    if "Author Full Names" in data and not data["Author Full Names"].dropna().empty:
-        author_column = "Author Full Names"
-    elif "Authors" in data and not data["Authors"].dropna().empty:
-        author_column = "Authors"
-        warnings.append("Author Full Names is unavailable; Authors was used for author analysis.")
-    if not author_column:
-        return pd.DataFrame(), None, None, ["No suitable author column was found; author analysis was skipped."], None
+    selected_authors = select_author_text(data)
+    source_counts = author_source_counts(data)
+    if selected_authors.dropna().empty:
+        return pd.DataFrame(), None, None, ["No suitable author column was found; author analysis was skipped."], source_counts
     work = data.copy()
+    work["Selected Author Names"] = selected_authors
     if "MNCS" not in work:
         work["MNCS"] = np.nan
         warnings.append("MNCS was missing; the author impact panel may be empty.")
-    authors = work[[author_column, "Cited by", "MNCS"]].dropna(subset=[author_column]).copy()
-    authors["num_authors"] = authors[author_column].apply(lambda value: len(str(value).split(";")))
+    authors = work[["Selected Author Names", "Cited by", "MNCS"]].dropna(subset=["Selected Author Names"]).copy()
+    authors["num_authors"] = authors["Selected Author Names"].apply(
+        lambda value: len([name for name in str(value).split(";") if name.strip()])
+    )
+    authors = authors[authors["num_authors"] > 0]
     authors["fractional_credit"] = 1 / authors["num_authors"]
-    authors["Authors_Split"] = authors[author_column].astype(str).str.split(";")
+    authors["Authors_Split"] = authors["Selected Author Names"].astype(str).str.split(";")
     exploded = authors.explode("Authors_Split")
     exploded["Authors_Split"] = exploded["Authors_Split"].str.strip()
     exploded = exploded[exploded["Authors_Split"] != ""]
@@ -196,7 +258,7 @@ def author_analysis(data: pd.DataFrame, top_n=10):
     ).reset_index().rename(columns={"Authors_Split": "Author"})
     total_authors = len(author_stats)
     if author_stats.empty:
-        return author_stats, None, None, warnings + ["No non-empty author names were found."], author_column
+        return author_stats, None, None, warnings + ["No non-empty author names were found."], source_counts
 
     top_traditional = author_stats.sort_values(
         by=["Total_Papers", "Total_Citations"], ascending=False
@@ -216,43 +278,51 @@ def author_analysis(data: pd.DataFrame, top_n=10):
                 f"{int(bar.get_width())}", va="center", fontsize=10)
     fig_productivity.tight_layout()
 
-    top_scientific = author_stats.sort_values(
-        by=["Fractional_Credit", "Avg_MNCS"], ascending=False
-    ).head(top_n).copy()
-    top_scientific["Fractional_Credit"] = top_scientific["Fractional_Credit"].round(2)
-    top_scientific["Avg_MNCS"] = top_scientific["Avg_MNCS"].round(2)
-    fig_impact, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
-    plot_scientific = top_scientific.sort_values("Fractional_Credit", ascending=True)
-    cividis_blue = plt.cm.cividis(0.0)
-    ax1.barh(plot_scientific["Author"], plot_scientific["Fractional_Credit"], color="#333333")
-    ax1.set_xlabel("Fractionalized Credit ($N_{frac}$)")
-    ax1.set_title("Author Contribution\n(Adjusted for Team Size)", fontweight="bold", fontsize=11)
-    ax1.grid(axis="x", linestyle="--", alpha=0.5)
-    ax1.spines[["top", "right"]].set_visible(False)
-    for index, value in enumerate(plot_scientific["Fractional_Credit"]):
-        ax1.text(value + 0.05, index, f"{value:.2f}", color="black", va="center",
-                 fontweight="bold", fontsize=9)
-    ax2.hlines(y=plot_scientific["Author"], xmin=0, xmax=plot_scientific["Avg_MNCS"],
-               color="gray", alpha=0.5, linewidth=1)
-    ax2.plot(plot_scientific["Avg_MNCS"], plot_scientific["Author"], "o",
-             markersize=9, color=cividis_blue)
-    ax2.axvline(x=1.0, color="black", linestyle="--", linewidth=1.2)
-    ax2.text(1.05, 0.02, "Global Avg (1.0)", transform=ax2.get_xaxis_transform(),
-             color="black", fontsize=9)
-    ax2.set_xlabel("Mean Normalized Citation Score ($MNCS$)")
-    ax2.set_title("Citation Impact\n(Field-Normalized)", fontweight="bold", fontsize=11)
-    ax2.grid(axis="x", linestyle="--", alpha=0.5)
-    ax2.spines[["top", "right", "left"]].set_visible(False)
-    ax2.tick_params(left=False)
-    for index, value in enumerate(plot_scientific["Avg_MNCS"]):
-        ax2.text(value + 0.1, index, f"{value:.2f}", color=cividis_blue, va="center",
-                 fontweight="bold", fontsize=9)
-    fig_impact.suptitle(
-        f"Author Performance: Fractionalized Contribution vs. Normalized Impact\n"
-        f"(Top {top_n} of $N={total_authors}$ Authors)", fontsize=14, y=1.05, fontweight="bold"
-    )
-    fig_impact.tight_layout()
-    return author_stats, fig_productivity, fig_impact, warnings, author_column
+    impact_candidates = author_stats.dropna(subset=["Avg_MNCS"]).copy()
+    fig_impact = None
+    if impact_candidates.empty:
+        warnings.append(
+            "No authors had a defined MNCS; the author normalized-impact panel was omitted."
+        )
+    else:
+        top_scientific = impact_candidates.sort_values(
+            by=["Fractional_Credit", "Avg_MNCS"], ascending=False
+        ).head(top_n).copy()
+        top_scientific["Fractional_Credit"] = top_scientific["Fractional_Credit"].round(2)
+        top_scientific["Avg_MNCS"] = top_scientific["Avg_MNCS"].round(2)
+        fig_impact, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+        plot_scientific = top_scientific.sort_values("Fractional_Credit", ascending=True)
+        cividis_blue = plt.cm.cividis(0.0)
+        ax1.barh(plot_scientific["Author"], plot_scientific["Fractional_Credit"], color="#333333")
+        ax1.set_xlabel("Fractionalized Credit ($N_{frac}$)")
+        ax1.set_title("Author Contribution\n(Adjusted for Team Size)", fontweight="bold", fontsize=11)
+        ax1.grid(axis="x", linestyle="--", alpha=0.5)
+        ax1.spines[["top", "right"]].set_visible(False)
+        for index, value in enumerate(plot_scientific["Fractional_Credit"]):
+            ax1.text(value + 0.05, index, f"{value:.2f}", color="black", va="center",
+                     fontweight="bold", fontsize=9)
+        ax2.hlines(y=plot_scientific["Author"], xmin=0, xmax=plot_scientific["Avg_MNCS"],
+                   color="gray", alpha=0.5, linewidth=1)
+        ax2.plot(plot_scientific["Avg_MNCS"], plot_scientific["Author"], "o",
+                 markersize=9, color=cividis_blue)
+        ax2.axvline(x=1.0, color="black", linestyle="--", linewidth=1.2)
+        ax2.text(1.05, 0.02, "Same-year corpus baseline (1.0)", transform=ax2.get_xaxis_transform(),
+                 color="black", fontsize=9)
+        ax2.set_xlabel("Corpus-internal year-normalized citation score (MNCS)")
+        ax2.set_title("Citation Impact\n(Year-Normalized Within Corpus)", fontweight="bold", fontsize=11)
+        ax2.grid(axis="x", linestyle="--", alpha=0.5)
+        ax2.spines[["top", "right", "left"]].set_visible(False)
+        ax2.tick_params(left=False)
+        for index, value in enumerate(plot_scientific["Avg_MNCS"]):
+            ax2.text(value + 0.1, index, f"{value:.2f}", color=cividis_blue, va="center",
+                     fontweight="bold", fontsize=9)
+        fig_impact.suptitle(
+            f"Author Performance: Fractionalized Contribution vs. Normalized Impact\n"
+            f"(Top {len(top_scientific)} of $N={total_authors}$ Authors)",
+            fontsize=14, y=1.05, fontweight="bold",
+        )
+        fig_impact.tight_layout()
+    return author_stats, fig_productivity, fig_impact, warnings, source_counts
 
 
 def annual_production_analysis(data: pd.DataFrame):
@@ -329,11 +399,22 @@ def citation_dynamics_analysis(data: pd.DataFrame, cutoff_year=None):
         citations, on="Publication Year", how="left"
     )
     citations["N"] = citations["N"].fillna(0)
+    # Matplotlib cannot coerce pandas' nullable ``pd.NA`` scalar to float.
+    # Keep missing citation means analytically undefined, but expose them to
+    # plotting code as ordinary IEEE NaN values.
+    citations["MeanTotalCitations"] = pd.to_numeric(
+        citations["MeanTotalCitations"], errors="coerce"
+    ).astype("float64")
     citations["Age"] = (cutoff - citations["Publication Year"]) + 0.5
     citations["MeanAnnualized"] = citations["MeanTotalCitations"] / citations["Age"]
     warnings = []
     if (citations["Age"] <= 0).any():
         warnings.append("The annualization cutoff is not later than every publication year; some citation velocities may be negative or undefined.")
+    if not citations["MeanTotalCitations"].notna().any():
+        warnings.append(
+            "Citation values are missing for every publication year; citation dynamics was skipped."
+        )
+        return citations, None, warnings
     fig, ax1 = plt.subplots(figsize=(12, 7))
     total_documents = int(citations["N"].sum())
     ax1.set_title(
@@ -488,7 +569,10 @@ def source_impact_analysis(data: pd.DataFrame, min_papers=5, max_length=30):
     figure_descriptive.tight_layout(rect=[0, 0.03, 1, 0.95])
 
     significant = source_stats[source_stats["Number_of_Publications"] >= min_papers].copy()
-    top_impact = significant.sort_values(["Avg_MNCS", "h_index"], ascending=False).head(10).copy()
+    significant_with_mncs = significant.dropna(subset=["Avg_MNCS"]).copy()
+    top_impact = significant_with_mncs.sort_values(
+        ["Avg_MNCS", "h_index"], ascending=False
+    ).head(10).copy()
     top_impact["Avg_MNCS"] = top_impact["Avg_MNCS"].round(2)
     rankings["top_sources_by_mncs"] = top_impact
     figure_impact = None
@@ -508,10 +592,10 @@ def source_impact_analysis(data: pd.DataFrame, min_papers=5, max_length=30):
         ax2.plot(plot_impact["Avg_MNCS"], plot_impact["Source_Display"], "o",
                  markersize=9, color=cividis_blue)
         ax2.axvline(x=1.0, color="black", linestyle="--", linewidth=1.2)
-        ax2.text(1.05, 0.02, "Global Avg (1.0)", transform=ax2.get_xaxis_transform(),
+        ax2.text(1.05, 0.02, "Same-year corpus baseline (1.0)", transform=ax2.get_xaxis_transform(),
                  color="black", fontsize=9, verticalalignment="bottom")
-        ax2.set_xlabel("Mean Normalized Citation Score (MNCS)")
-        ax2.set_title("Normalized Impact Efficiency (MNCS)", fontweight="bold")
+        ax2.set_xlabel("Corpus-internal year-normalized citation score (MNCS)")
+        ax2.set_title("Year-Normalized Impact Within Corpus (MNCS)", fontweight="bold")
         ax2.grid(axis="x", linestyle="--", alpha=0.5)
         ax2.spines[["top", "right", "left"]].set_visible(False)
         ax2.tick_params(left=False)
@@ -520,12 +604,17 @@ def source_impact_analysis(data: pd.DataFrame, min_papers=5, max_length=30):
                      va="center", fontweight="bold", fontsize=9)
         figure_impact.suptitle(
             "Journal Impact Analysis: Accumulated Prestige vs. Normalized Efficiency\n"
-            f"(Subset: $N={len(significant)}$ Sources with $\\geq${min_papers} Articles)",
+            f"(Subset: $N={len(significant_with_mncs)}$ Sources with defined MNCS "
+            f"and $\\geq${min_papers} Articles)",
             fontsize=16, y=1.05,
         )
         figure_impact.tight_layout()
-    else:
+    elif significant.empty:
         warnings.append(f"No sources met the minimum of {min_papers} papers for the MNCS impact panel.")
+    else:
+        warnings.append(
+            "No qualifying sources had a defined MNCS; the source normalized-impact panel was omitted."
+        )
     figures = {"composite_top_sources_descriptive": figure_descriptive}
     if figure_impact is not None:
         figures["top_10_journals_impact_analysis"] = figure_impact
@@ -546,7 +635,7 @@ def run_descriptive_bibliometrics(
     warnings.extend(mncs_warnings)
     document_types, document_figure, document_warnings = document_type_analysis(enriched)
     warnings.extend(document_warnings)
-    authors, author_productivity_figure, author_impact_figure, author_warnings, author_column = author_analysis(
+    authors, author_productivity_figure, author_impact_figure, author_warnings, author_sources = author_analysis(
         enriched, top_n=top_n
     )
     warnings.extend(author_warnings)
@@ -574,8 +663,12 @@ def run_descriptive_bibliometrics(
         "tables": {
             "main_information_summary": main_information,
             "mncs_yearly_baselines": mncs_baselines,
+            "mncs_audit": mncs_audit_table(enriched),
             "document_type_summary": document_types,
             "author_metrics_complete": authors,
+            "author_name_source_audit": pd.DataFrame(
+                author_sources.items(), columns=["Author-name source", "Papers"]
+            ),
             "annual_scientific_production": annual,
             "growth_regression_statistics": regression,
             "citation_dynamics": citation_dynamics,
@@ -583,7 +676,7 @@ def run_descriptive_bibliometrics(
             **source_tables,
         },
         "figures": figures, "warnings": list(dict.fromkeys(warnings)),
-        "author_column": author_column,
+        "author_source_counts": author_sources,
         "config": {"cutoff_year": cutoff_year, "top_n": top_n,
                    "min_source_papers": min_source_papers,
                    "max_source_title_length": max_source_title_length},

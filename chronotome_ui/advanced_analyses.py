@@ -86,12 +86,11 @@ def render_advanced_analyses():
     """Render each completed-workflow analysis as an independent opt-in action."""
     st.title("Advanced Analyses and Final Dataset Summary")
     st.markdown(
-        "Choose the analyses you need. Each section has its own generation button, retained result, "
-        "graph controls, and publication-grade downloads."
+        "Select an analysis to generate its tables, figure controls, and downloads."
     )
     st.info(
-        "This phase follows Geographic analysis so its final summary can include international "
-        "collaboration alongside source, author, keyword, citation, and document-type structure."
+        "The final summary includes international collaboration, sources, authors, keywords, "
+        "citations, and document types."
     )
 
     geographic_results = st.session_state.get("geographic_analysis_results")
@@ -154,7 +153,13 @@ def render_advanced_analyses():
     result = _component_result("authors", "author impact ranking", data, component_results)
     if result:
         tables = result["tables"]
-        st.caption(f"Author field used: {result['author_column'] or 'Unavailable'}")
+        author_sources = result.get("author_source_counts", {})
+        st.caption(
+            "Author names are selected per paper: "
+            f"{author_sources.get('usable_full_names', 0):,} rows used full names; "
+            f"{author_sources.get('used_abbreviated_names', 0):,} used abbreviated names; "
+            f"{author_sources.get('unusable_rows', 0):,} had no usable author text."
+        )
         st.dataframe(tables["top_10_authors_by_impact"], width="stretch", hide_index=True)
         with st.expander("Complete author impact ranking"):
             st.dataframe(tables["all_authors_ranked_by_impact"], width="stretch", hide_index=True)

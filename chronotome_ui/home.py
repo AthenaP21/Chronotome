@@ -13,7 +13,7 @@ def render_home():
         "scientometric analysis using **Scopus** and **Web of Science** exports."
     )
 
-    st.markdown("### What you get at the end")
+    st.markdown("### Outputs")
     first, second, third = st.columns(3)
     with first:
         st.markdown("#### Merged research corpus")
@@ -23,11 +23,10 @@ def render_home():
         st.write("PRISMA-style counts from identification through deduplication to the included dataset.")
     with third:
         st.markdown("#### Reproducible analyses")
-        st.write("Country, journal, impact, thematic, and collaboration analyses with publication-grade figures.")
+        st.write("Country, journal, impact, thematic, and collaboration analyses with PNG, SVG, and PDF figures.")
 
     st.info(
-        "**New to bibliometrics?** Start with Data ingestion. Chronotome replaces local file paths "
-        "and code switches with guided controls, validation messages, and downloads."
+        "Start with **Data ingestion** to load and verify Scopus or Web of Science exports."
     )
 
     st.divider()
@@ -36,7 +35,7 @@ def render_home():
         "Chronotome is part of the **Chronotome / Open Bibliometrics** open-science release "
         "archived on Zenodo."
     )
-    st.link_button("Open Zenodo record — DOI 10.5281/zenodo.17514930", "https://doi.org/10.5281/zenodo.17514930")
+    st.link_button("Open Zenodo record (DOI 10.5281/zenodo.17514930)", "https://doi.org/10.5281/zenodo.17514930")
 
     archive, resource = st.columns([1, 1])
     with archive:

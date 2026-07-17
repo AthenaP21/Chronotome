@@ -13,6 +13,7 @@ from chronotome_core import (
     prepare_uploaded_thematic_dataset, run_advanced_thematic_analysis,
     run_final_topic_models, run_thematic_preprocessing, run_topic_model_evaluation,
 )
+from chronotome_core.runner import DEFAULT_CONFIG
 from chronotome_core.thematic_bibliometrics import (
     DEFAULT_BLOCKLIST_PHRASES, DEFAULT_NOISE_LISTS,
     install_nltk_resources, thematic_resource_status,
@@ -126,7 +127,7 @@ def render_thematic_analysis():
     for column, (label, key) in zip(columns, labels):
         column.metric(label, "Ready" if status[key] else "Missing")
     if not status["nltk_package"]:
-        st.warning("NLTK is not installed in this environment. Install the updated requirements; the regex fallback remains available.")
+        st.warning("NLTK is not installed. Install the package requirements to use NLTK text processing.")
     elif not all(status.values()):
         if st.button("Download or repair NLTK resources", key="thematic-nltk-download"):
             try:
@@ -136,7 +137,7 @@ def render_thematic_analysis():
                     st.success("NLTK resources are ready.")
                     st.rerun()
                 else:
-                    st.warning("Some resources remain unavailable; the analysis can use its fallback preprocessor.")
+                    st.warning("Some NLTK resources are unavailable. Chronotome will use regex-based text processing.")
             except Exception as exc:
                 st.error(f"NLTK resources could not be downloaded: {exc}")
     else:
@@ -190,7 +191,8 @@ def render_thematic_analysis():
     with st.expander("Topic-model vectorizer settings", expanded=False):
         model_left, model_right = st.columns(2)
         model_min_df = model_left.number_input(
-            "Topic-model minimum document frequency", 1, 100, 2, key="thematic_model_min_df",
+            "Topic-model minimum document frequency", 1, 100,
+            int(DEFAULT_CONFIG["topic_model_min_df"]), key="thematic_model_min_df",
         )
         model_max_df = model_right.slider(
             "Topic-model maximum document share", 0.50, 1.00, 0.95, 0.01,
@@ -251,11 +253,14 @@ def render_thematic_analysis():
                          "thematic_preprocessing_tables.xlsx", "thematic-pre")
 
     _section(5, "Automatic topic selection and evolution",
-             "Chronotome evaluates candidate k values in the background, selects the best LDA/NMF solutions, and trains both final models automatically.")
+             "Chronotome evaluates the configured k values, selects the highest-coherence LDA and NMF candidates, and trains both models.")
     option_left, option_right = st.columns(2)
-    bin_duration = option_left.number_input("Time-bin width (years)", 1, 25, 5, key="thematic-bin-duration")
+    bin_duration = option_left.number_input(
+        "Time-bin width (years)", 1, 25, int(DEFAULT_CONFIG["topic_bin_duration"]),
+        key="thematic-bin-duration",
+    )
     top_words = option_right.number_input("Terms retained per topic", 5, 30, 15, key="thematic-top-words")
-    candidate_k = tuple(range(3, 11))
+    candidate_k = tuple(DEFAULT_CONFIG["topic_k_values"])
     modeling_signature = (
         settings_signature, candidate_k, int(model_min_df), float(model_max_df),
         int(bin_duration), int(top_words),
@@ -316,7 +321,7 @@ def render_thematic_analysis():
         st.warning("The preprocessing or evolution settings changed. Rerun automatic topic modeling.")
 
     _section(6, "Advanced thematic analyses",
-             "Topic impact, intellectual intersections, canonical papers, and country specialization.")
+             "Topic impact, intellectual intersections, most-cited papers, and country specialization.")
     advanced_left, advanced_middle, advanced_right = st.columns(3)
     cooccurrence_threshold = advanced_left.slider(
         "Co-occurrence probability threshold", 0.01, 0.50, 0.10, 0.01,
@@ -334,7 +339,7 @@ def render_thematic_analysis():
     if st.button("Run advanced thematic analyses", type="primary", disabled=not final_current,
                  key="run-advanced-thematic"):
         try:
-            with st.spinner("Calculating topic impact, co-occurrence, canonical papers, and specialization…"):
+            with st.spinner("Calculating topic impact, co-occurrence, most-cited papers, and specialization…"):
                 advanced = run_advanced_thematic_analysis(
                     final["data"], cooccurrence_threshold=float(cooccurrence_threshold),
                     min_country_documents=int(min_country_documents), top_countries=int(top_countries),
@@ -354,6 +359,10 @@ def render_thematic_analysis():
         for warning in advanced["warnings"]:
             st.warning(warning)
         st.markdown("#### Topic citation impact (MNCS)")
+        st.caption(
+            "Topic impact aggregates the corpus-internal year-normalized citation score; "
+            "each defined paper score uses the mean citations of retained papers from the same publication year."
+        )
         st.dataframe(advanced["tables"]["topic_citation_impact_mncs"], width="stretch", hide_index=True)
         _render_figure(advanced, "topic_citation_impact_mncs", "thematic-advanced-impact")
         st.markdown("#### Topic co-occurrence")

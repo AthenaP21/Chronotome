@@ -10,6 +10,7 @@ import streamlit as st
 
 
 _LIST_LIKE = (list, tuple, set, dict)
+_PROVENANCE_LIST_COLUMNS = {"Databases", "Source Files"}
 
 
 def _display_value(value):
@@ -39,6 +40,17 @@ def arrow_safe_frame(data):
     display = data.copy(deep=False)
     for column in display.columns:
         series = display[column]
+        if column in _PROVENANCE_LIST_COLUMNS:
+            display[column] = series.map(
+                lambda value: "; ".join(
+                    str(item).strip()
+                    for item in (sorted(value) if isinstance(value, set) else value)
+                    if str(item).strip()
+                )
+                if isinstance(value, (list, tuple, set))
+                else ("" if _is_missing(value) else str(value))
+            )
+            continue
         if series.dtype != "object":
             continue
         non_null = series.dropna()

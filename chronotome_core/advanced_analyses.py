@@ -25,6 +25,7 @@ from .descriptive_bibliometrics import (
     calculate_local_h_index, configure_publication_style, normalize_doc_type,
     source_impact_analysis,
 )
+from .preprocessing import author_source_counts, select_author_text
 
 
 def safe_author_split(value) -> list[str]:
@@ -39,21 +40,18 @@ def _unique_terms(series: pd.Series) -> int:
     return int(terms[(terms != "") & (terms.str.lower() != "nan")].nunique())
 
 
-def _author_impact(data: pd.DataFrame) -> tuple[pd.DataFrame, str | None, list[str]]:
+def _author_impact(data: pd.DataFrame) -> tuple[pd.DataFrame, dict, list[str]]:
     warnings = []
-    author_column = None
-    if "Author Full Names" in data and not data["Author Full Names"].dropna().empty:
-        author_column = "Author Full Names"
-    elif "Authors" in data and not data["Authors"].dropna().empty:
-        author_column = "Authors"
-        warnings.append("Author Full Names was unavailable; Authors was used for impact rankings.")
-    if not author_column:
-        return pd.DataFrame(columns=["Author", "h_index", "Total_Citations", "Total_Papers"]), None, [
+    selected = select_author_text(data)
+    source_counts = author_source_counts(data)
+    if selected.dropna().empty:
+        return pd.DataFrame(columns=["Author", "h_index", "Total_Citations", "Total_Papers"]), source_counts, [
             "No author field was available for author impact analysis."
         ]
-    work = data[[author_column, "Cited by"]].dropna(subset=[author_column]).copy()
+    work = pd.DataFrame({"Selected Author Names": selected, "Cited by": data["Cited by"]})
+    work = work.dropna(subset=["Selected Author Names"]).copy()
     work["Cited by"] = pd.to_numeric(work["Cited by"], errors="coerce").fillna(0)
-    work["Author"] = work[author_column].apply(safe_author_split)
+    work["Author"] = work["Selected Author Names"].apply(safe_author_split)
     exploded = work.explode("Author")
     exploded = exploded[exploded["Author"].astype(str).str.strip() != ""]
     stats = exploded.groupby("Author").agg(
@@ -65,12 +63,12 @@ def _author_impact(data: pd.DataFrame) -> tuple[pd.DataFrame, str | None, list[s
         ["h_index", "Total_Citations", "Total_Papers"], ascending=False
     ).reset_index(drop=True)
     stats.insert(0, "Rank", np.arange(1, len(stats) + 1))
-    return stats, author_column, warnings
+    return stats, source_counts, warnings
 
 
 def _final_summary(
     data: pd.DataFrame, source_stats: pd.DataFrame,
-    author_stats: pd.DataFrame, author_column: str | None,
+    author_stats: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     summary: dict[str, object] = {"Total Documents": len(data)}
     current_year = datetime.now().year
@@ -104,8 +102,10 @@ def _final_summary(
         summary["Total Citations"] = citations.sum()
     if not author_stats.empty:
         summary["Authors"] = len(author_stats)
-    if author_column:
-        author_counts = data[author_column].apply(safe_author_split).apply(len)
+    selected_authors = select_author_text(data)
+    if selected_authors.notna().any():
+        author_counts = selected_authors.apply(safe_author_split).apply(len)
+        author_counts = author_counts[author_counts > 0]
         summary["Co-Authors per Doc"] = author_counts.mean()
         summary["Single-authored Docs"] = int((author_counts == 1).sum())
     if "Country_Classification" in data:
@@ -145,12 +145,16 @@ def _article_rankings(data: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if "Title" not in data or "Cited by" not in data:
         return pd.DataFrame(), pd.DataFrame()
     work = data.copy()
+    work["Selected Author Names"] = select_author_text(work)
     work["Cited by"] = pd.to_numeric(work["Cited by"], errors="coerce").fillna(0)
-    columns = [column for column in ["Title", "Authors", "Publication Year", "Cited by", "DOI"] if column in work]
+    columns = [column for column in [
+        "Title", "Authors", "Author Full Names", "Selected Author Names",
+        "Publication Year", "Cited by", "DOI",
+    ] if column in work]
     full = work[columns].sort_values("Cited by", ascending=False).reset_index(drop=True)
     full.insert(0, "Rank", np.arange(1, len(full) + 1))
     top = full.head(10).copy()
-    top["First_Author"] = top.get("Authors", pd.Series("N/A", index=top.index)).apply(
+    top["First_Author"] = top["Selected Author Names"].apply(
         lambda value: safe_author_split(value)[0] if safe_author_split(value) else "N/A"
     )
     top["Short_Title"] = top["Title"].apply(
@@ -221,12 +225,13 @@ def _hot_papers(data: pd.DataFrame):
     if not {"Publication Year", "Cited by", "Title"}.issubset(data.columns):
         return pd.DataFrame(), pd.DataFrame(), recent_year, ["Required hot-paper columns were unavailable."]
     work = data.copy()
+    work["Selected Author Names"] = select_author_text(work)
     work["Publication Year"] = pd.to_numeric(work["Publication Year"], errors="coerce")
     work["Cited by"] = pd.to_numeric(work["Cited by"], errors="coerce").fillna(0)
     recent = work[work["Publication Year"] >= recent_year].sort_values("Cited by", ascending=False).copy()
     if recent.empty:
         return recent, recent, recent_year, [f"No articles were published since {recent_year}."]
-    recent["First Author"] = recent.get("Authors", pd.Series("", index=recent.index)).apply(
+    recent["First Author"] = recent["Selected Author Names"].apply(
         lambda value: safe_author_split(value)[0] if safe_author_split(value) else "N/A"
     )
     recent["Title (Short)"] = recent["Title"].apply(
@@ -242,11 +247,14 @@ def _hot_papers(data: pd.DataFrame):
 
 
 def _team_science(data: pd.DataFrame):
-    if "Authors" not in data or "Cited by" not in data:
-        return pd.DataFrame(), None, ["Authors or Cited by was unavailable for team-size analysis."]
+    if "Cited by" not in data:
+        return pd.DataFrame(), None, ["Cited by was unavailable for team-size analysis."]
     work = data.copy()
+    work["Selected Author Names"] = select_author_text(work)
+    if work["Selected Author Names"].dropna().empty:
+        return pd.DataFrame(), None, ["No author names were available for team-size analysis."]
     work["Cited by"] = pd.to_numeric(work["Cited by"], errors="coerce").fillna(0)
-    work["Author_Count"] = work["Authors"].apply(safe_author_split).apply(len)
+    work["Author_Count"] = work["Selected Author Names"].apply(safe_author_split).apply(len)
     work = work[work["Author_Count"] > 0].copy()
     work["Team_Size_Category"] = work["Author_Count"].apply(lambda count: str(count) if count < 6 else "6+")
     category_order = ["1", "2", "3", "4", "5", "6+"]
@@ -342,7 +350,7 @@ def run_advanced_bibliometric_analysis(data: pd.DataFrame, analyses=None) -> dic
     tables: dict[str, pd.DataFrame] = {}
     figures: dict = {}
     warnings: list[str] = []
-    author_column = None
+    author_sources: dict = {}
     recent_year = datetime.now().year - 3
 
     source_stats = pd.DataFrame()
@@ -355,12 +363,15 @@ def run_advanced_bibliometric_analysis(data: pd.DataFrame, analyses=None) -> dic
 
     author_stats = pd.DataFrame()
     if selected & {"summary", "authors"}:
-        author_stats, author_column, author_warnings = _author_impact(enriched)
+        author_stats, author_sources, author_warnings = _author_impact(enriched)
         warnings.extend(author_warnings)
+        tables["author_name_source_audit"] = pd.DataFrame(
+            author_sources.items(), columns=["Author-name source", "Papers"]
+        )
 
     if "summary" in selected:
         final_summary, document_snapshot = _final_summary(
-            enriched, source_stats, author_stats, author_column
+            enriched, source_stats, author_stats
         )
         tables.update({
             "final_main_summary": final_summary,
@@ -407,6 +418,6 @@ def run_advanced_bibliometric_analysis(data: pd.DataFrame, analyses=None) -> dic
         warnings.extend(component_warnings)
     return {
         "data": enriched, "tables": tables, "figures": figures,
-        "warnings": list(dict.fromkeys(warnings)), "author_column": author_column,
+        "warnings": list(dict.fromkeys(warnings)), "author_source_counts": author_sources,
         "recent_year": recent_year, "analyses": sorted(selected),
     }

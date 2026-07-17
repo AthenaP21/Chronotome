@@ -4,21 +4,13 @@ from __future__ import annotations
 
 import json
 
-import streamlit.components.v1 as components
 import streamlit as st
-
-
-def request_scroll_to_top(*, rerun: bool = True) -> None:
-    """Ask the app shell to scroll to the top on the next render."""
-    st.session_state["_chronotome_scroll_top"] = True
-    if rerun:
-        st.rerun()
+import streamlit.components.v1 as components
 
 
 def navigate_to_page(page: str) -> None:
-    """Navigate to a workflow page and reset the viewport."""
+    """Navigate to a workflow page without changing the current viewport."""
     st.session_state["_chronotome_navigate_to"] = page
-    st.session_state["_chronotome_scroll_top"] = True
     st.rerun()
 
 

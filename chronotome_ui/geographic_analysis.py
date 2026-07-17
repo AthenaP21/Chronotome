@@ -6,9 +6,10 @@ import pandas as pd
 import streamlit as st
 
 from chronotome_core import run_country_case_study, run_geographic_bibliometrics
+from chronotome_core.runner import DEFAULT_CONFIG
 from chronotome_ui.figure_controls import render_customizable_figure
 from chronotome_ui.figure_preview import render_svg
-from chronotome_ui.navigation import navigate_to_page, request_scroll_to_top
+from chronotome_ui.navigation import navigate_to_page
 from chronotome_ui.state import clear_downstream_state
 
 
@@ -89,7 +90,6 @@ def _render_country_case_study(case_result: dict):
         st.session_state["country_selector_epoch"] = st.session_state.get("country_selector_epoch", 0) + 1
         st.session_state.pop("geographic_case_result", None)
         st.session_state.pop("geographic_case_token", None)
-        request_scroll_to_top()
 
     st.title(f"Country Case Study: {country}")
     st.caption("Temporal dashboard and statistical field guide")
@@ -113,7 +113,7 @@ def _render_country_case_study(case_result: dict):
     case_columns = st.columns(3 if has_case_svg else 2)
     left, right = case_columns[0], case_columns[-1]
     left.download_button(
-        "Download publication-grade PNG (300 DPI)",
+        "Download PNG (300 DPI)",
         exports[f"Plots/{safe_name}_Deep_Dive_Analysis.png"],
         f"{safe_name}_Deep_Dive_Analysis.png", "image/png",
     )
@@ -192,7 +192,6 @@ def _render_country_case_study(case_result: dict):
         st.session_state["country_selector_epoch"] = st.session_state.get("country_selector_epoch", 0) + 1
         st.session_state.pop("geographic_case_result", None)
         st.session_state.pop("geographic_case_token", None)
-        request_scroll_to_top()
 def render_geographic_analysis():
     """Render country collaboration, impact, and network analyses."""
     if (
@@ -205,11 +204,11 @@ def render_geographic_analysis():
     st.title("Geographic Distribution and Collaboration Patterns")
     st.markdown(
         "Sections 17–18 examine where the corpus is produced, whether each publication is domestic "
-        "or international, how volume compares with time-normalized impact, and how international "
+        "or international, how volume compares with corpus-internal year-normalized impact, and how international "
         "collaboration is structured."
     )
     st.info(
-        "This phase summarizes country coverage, SCP/MCP collaboration, citation impact, and "
+        "Results cover country coverage, SCP/MCP collaboration, citation impact, and "
         "international collaboration structure for the current corpus."
     )
 
@@ -240,7 +239,7 @@ def render_geographic_analysis():
             if missing:
                 st.warning(
                     f"Optional impact fields missing: {', '.join(missing)}. "
-                    "Country collaboration can still run, but impact values may use safe fallbacks."
+                    "Country collaboration can still run; unavailable impact values remain undefined."
                 )
             with st.expander("Institution data for country case studies"):
                 case_affiliations = _matching_entity_affiliations(data)
@@ -266,7 +265,8 @@ def render_geographic_analysis():
         help="Top countries by MNCS after the minimum-paper filter.", key="geo_impact_top_n",
     )
     min_papers = basic_right.number_input(
-        "Minimum papers for country impact", min_value=1, max_value=100, value=5,
+        "Minimum papers for country impact", min_value=1, max_value=100,
+        value=int(DEFAULT_CONFIG["country_min_papers"]),
         help="Reduces unstable MNCS rankings from countries with very few papers.", key="geo_min_papers",
     )
     exclude_unknown = basic_last.checkbox(
@@ -276,7 +276,8 @@ def render_geographic_analysis():
     with st.expander("Advanced country-analysis settings", expanded=False):
         adv_left, adv_mid, adv_right, adv_last = st.columns(4)
         advanced_min_publications = adv_left.number_input(
-            "Minimum papers for performance matrix", min_value=1, max_value=100, value=5,
+            "Minimum papers for performance matrix", min_value=1, max_value=100,
+            value=int(DEFAULT_CONFIG["country_min_papers"]),
             key="geo_advanced_min_pubs",
         )
         citation_top_n = adv_mid.number_input(
@@ -295,6 +296,12 @@ def render_geographic_analysis():
             "Spring-layout iterations", min_value=25, max_value=1000, value=250, step=25,
             help="Lower this for faster rendering on very large networks.", key="geo_network_iterations",
         )
+    generate_analysis = st.button(
+        "Generate geographic analysis",
+        type="primary",
+        disabled=data is None,
+        key="generate-geographic-analysis",
+    )
     analysis_signature = (
         "svg-preview-v1", dataset_signature, int(collaboration_top_n), int(impact_top_n),
         int(min_papers), bool(exclude_unknown), int(advanced_min_publications),
@@ -303,9 +310,9 @@ def render_geographic_analysis():
 
     results = st.session_state.get("geographic_analysis_results")
     current = results is not None and st.session_state.get("geographic_analysis_signature") == analysis_signature
-    if data is not None and not current:
+    if generate_analysis and data is not None:
         try:
-            with st.spinner("Classifying SCP/MCP records and rendering publication-grade country figures…"):
+            with st.spinner("Classifying SCP/MCP records and rendering country figures…"):
                 result = run_geographic_bibliometrics(
                     data,
                     collaboration_top_n=int(collaboration_top_n),
@@ -329,6 +336,8 @@ def render_geographic_analysis():
             st.error(f"An unexpected country value stopped geographic analysis: {exc}")
 
     if not current:
+        if data is not None:
+            st.info("Set the analysis options above, then select Generate geographic analysis to create the results.")
         return
     for warning in results["warnings"]:
         st.warning(warning)
@@ -343,7 +352,7 @@ def render_geographic_analysis():
 - **MCP:** two or more unique detected countries on the article.
 - **Unknown:** no usable detected country; excluded from rankings by default but retained for auditing.
 - Country production uses **full counting**: one MCP article contributes once to every participating country.
-- Country MNCS is the mean of article-level, corpus-internal year-normalized citation scores.
+- Country MNCS is the mean of defined article-level corpus-internal year-normalized citation scores.
             """
         )
     c1, c2, c3, c4 = st.columns(4)
@@ -362,7 +371,7 @@ def render_geographic_analysis():
         st.dataframe(tables["country_collaboration_summary"], width="stretch", hide_index=True)
 
     _section(4, "Country impact",
-             "MNCS is normalized against publication-year averages inside this corpus, not a global database.")
+             "MNCS is the corpus-internal year-normalized citation score, using the mean citations of retained papers from the same publication year.")
     impact_table = tables["top_countries_by_mncs"]
     if impact_table.empty:
         st.warning("No country met the configured minimum-paper threshold.")
@@ -377,7 +386,7 @@ def render_geographic_analysis():
     _render_figure(exports, "Country_Citation_Impact_Distribution", figures.get("Country_Citation_Impact_Distribution"))
 
     _section(6, "Scientometric performance matrix",
-             "X = log publication volume; Y and color = internal MNCS; bubble area = accumulated citations.")
+             "X = log publication volume; Y and color = corpus-internal year-normalized citation score; bubble area = accumulated citations.")
     if "Plots/Scientometric_Performance_Matrix_Productivity_vs_Impact.png" in exports:
         _render_figure(
             exports, "Scientometric_Performance_Matrix_Productivity_vs_Impact",
@@ -389,7 +398,7 @@ def render_geographic_analysis():
         st.warning("No country met the configured minimum-publication threshold.")
 
     _section(7, "International collaboration network",
-             "Node size = weighted collaboration degree; node color = MNCS; strongest configured ties are shown.")
+             "Node size = weighted collaboration degree; node color = corpus-internal year-normalized citation score; strongest configured ties are shown.")
     c1, c2, c3 = st.columns(3)
     c1.metric("Full-network countries", f"{metadata['network_countries']:,}")
     c2.metric("Full-network links", f"{metadata['network_links']:,}")
@@ -406,7 +415,7 @@ def render_geographic_analysis():
     else:
         st.warning("No multi-country links were available for a collaboration network.")
 
-    _section(8, "Analysis data", "Article-level country classification and normalized-impact preview.")
+    _section(8, "Analysis data", "Article-level country classification and corpus-internal year-normalized citation preview.")
     preview_columns = [
         column for column in (
             "Title", "Publication Year", "Countries_Extracted", "Country_Classification", "Cited by", "MNCS"
@@ -414,7 +423,7 @@ def render_geographic_analysis():
     ]
     st.dataframe(results["data"][preview_columns].head(200), width="stretch", hide_index=True)
 
-    _section(9, "Downloads", "Complete publication-grade figures, tables, networks, and classified data.")
+    _section(9, "Downloads", "Figures, tables, networks, and classified data.")
     st.download_button(
         "Download all Sections 17–18 outputs (ZIP)",
         exports["chronotome_geographic_distribution_outputs.zip"],
@@ -465,7 +474,8 @@ def render_geographic_analysis():
         c1, c2, c3 = st.columns(3)
         c1.metric("Publication appearances", f"{int(selected_row['Articles']):,}")
         c2.metric("MCP share", f"{float(selected_row['MCP %']):.1f}%")
-        c3.metric("MNCS", f"{float(selected_row['MNCS']):.2f}")
+        selected_mncs = pd.to_numeric(selected_row["MNCS"], errors="coerce")
+        c3.metric("MNCS", "N/A" if pd.isna(selected_mncs) else f"{selected_mncs:.2f}")
         if st.button(f"Open {selected_country} case study", type="primary"):
             case_token = (analysis_signature, case_affiliation_signature, selected_country)
             try:
@@ -478,7 +488,6 @@ def render_geographic_analysis():
                     st.session_state["geographic_case_result"] = case_result
                     st.session_state["geographic_case_token"] = case_token
                     st.session_state["geographic_view"] = "case"
-                    st.session_state["_chronotome_scroll_top"] = True
                 st.rerun()
             except (ValueError, KeyError) as exc:
                 st.error(f"The {selected_country} case study could not run: {exc}")

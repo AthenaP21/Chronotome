@@ -1,4 +1,4 @@
-"""Single high-level runner for the complete Chronotome workflow."""
+"""Canonical stage runners and full-workflow orchestration for Chronotome."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ import zipfile
 import networkx as nx
 import gc
 import os
-import resource
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 
-from .analysis import (
-    add_mncs, annual_production, author_metrics, bradford_table, citation_dynamics,
-    country_metrics, document_types, hot_papers, institution_networks, main_summary,
-    ranked_articles, source_metrics, team_size_impact, thematic_analysis,
-)
+try:  # ``resource`` is unavailable on Windows.
+    import resource
+except ImportError:  # pragma: no cover - exercised on Windows installations
+    resource = None
+
 from .advanced_analyses import run_advanced_bibliometric_analysis
 from .export import (
-    create_exports, dataframe_csv, dataframe_excel, figure_pdf, figure_png,
+    dataframe_csv, dataframe_excel, figure_pdf, figure_png,
     figure_svg, raster_export_policy, release_figures,
 )
 from .entity_resolution import resolve_entities
@@ -28,18 +28,48 @@ from .geographic_bibliometrics import (
     advanced_country_analysis, country_case_study_analysis,
     geographic_distribution_analysis,
 )
-from .io import combine_by_source, inspect_uploads, inspect_source_uploads, load_uploads
+from .io import inspect_source_uploads
 from .institutional_bibliometrics import (
     institutional_analysis, institutional_community_visualization,
-    prepare_institutional_dataset,
 )
-from .preprocessing import apply_time_filter, deduplicate, enrich_affiliations, harmonize
+from .preprocessing import apply_time_filter, deduplicate, harmonize
 from .thematic_bibliometrics import (
     DEFAULT_BLOCKLIST_PHRASES, DEFAULT_NOISE_LISTS,
     advanced_thematic_analysis, final_topic_models, prepare_thematic_dataset,
     thematic_preprocessing, topic_model_evaluation,
 )
-from .visualization import build_figures
+
+
+DEFAULT_CONFIG: dict[str, object] = {
+    "enable_time_filter": True,
+    "collection_year": None,
+    "top_n": 10,
+    "min_source_papers": 5,
+    "max_source_title_length": 30,
+    "country_min_papers": 5,
+    "institutional_top_n_plot": 30,
+    "max_institutions_per_paper": 50,
+    "topic_k_values": tuple(range(3, 11)),
+    "thematic_min_df": None,
+    "topic_model_min_df": 2,
+    "topic_bin_duration": 5,
+    "run_topic_institutional": True,
+    "community_top_n_global": 50,
+    "community_top_n_eu": 30,
+}
+
+
+def resolve_config(
+    supplied_config: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Return the canonical workflow configuration and reject stale options."""
+    supplied = dict(supplied_config or {})
+    unknown = sorted(str(key) for key in set(supplied) - set(DEFAULT_CONFIG))
+    if unknown:
+        raise ValueError(
+            "Unknown Chronotome configuration key(s): " + ", ".join(unknown)
+        )
+    return {**DEFAULT_CONFIG, **supplied}
 
 
 def _attach_archive(files: dict[str, bytes], archive_name: str, enabled=True) -> None:
@@ -60,6 +90,8 @@ def _rss_megabytes() -> float:
             resident_pages = int(handle.read().split()[1])
         return resident_pages * os.sysconf("SC_PAGE_SIZE") / (1024 ** 2)
     except (OSError, ValueError, IndexError):
+        if resource is None:
+            return float("nan")
         rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         return rss / (1024 ** 2) if sys.platform == "darwin" else rss / 1024
 
@@ -130,7 +162,18 @@ def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None, in
     stream, and stops after the PRISMA-ready merged dataset is produced.
     """
     modes = {"Scopus": "single", "WoS": "single", **(modes or {})}
-    config = {"enable_time_filter": True, "collection_year": None, **(config or {})}
+    supplied_config = dict(config or {})
+    allowed_config = {"enable_time_filter", "collection_year"}
+    unknown = sorted(str(key) for key in set(supplied_config) - allowed_config)
+    if unknown:
+        raise ValueError(
+            "Unknown ingestion configuration key(s): " + ", ".join(unknown)
+        )
+    config = {
+        "enable_time_filter": DEFAULT_CONFIG["enable_time_filter"],
+        "collection_year": DEFAULT_CONFIG["collection_year"],
+        **supplied_config,
+    }
     verifications = {}
     sources = {}
     warnings = []
@@ -150,7 +193,7 @@ def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None, in
     merged, report, harmonization_warnings, preprocessing_audit = harmonize(sources, include_audit=True)
     warnings.extend(harmonization_warnings)
     final, duplicate_doi_records, deduplication_audit = deduplicate(merged, report, include_audit=True)
-    before_time_filter = final.copy()
+    records_before_time_filter = len(final)
     final = apply_time_filter(final, config["enable_time_filter"], config["collection_year"], report)
     if final.empty:
         raise ValueError("No records remain. Disable the collection-year filter or check publication years.")
@@ -163,7 +206,7 @@ def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None, in
         ("Cutoff source", "Manual input" if config["enable_time_filter"] and config["collection_year"] else
          ("Current system year" if config["enable_time_filter"] else "Not applicable")),
         ("Cutoff rule", f"Keep Publication Year < {cutoff}" if cutoff else "Keep all publication years"),
-        ("Records before time filter", len(before_time_filter)),
+        ("Records before time filter", records_before_time_filter),
         ("Records excluded", report["excluded_by_time_filter"]),
         ("Final year range", f"{int(final_years.min())}–{int(final_years.max())}" if not final_years.empty else "Not available"),
         ("Final records", len(final)),
@@ -173,8 +216,17 @@ def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None, in
         "merged_bibliometric_dataset.xlsx": dataframe_excel(final, "Merged deduplicated"),
         "prisma_reporting_counts.csv": dataframe_csv(table),
         "preprocessing_source_audit.csv": dataframe_csv(preprocessing_audit["source_summary"]),
+        "preprocessing_source_file_audit.csv": dataframe_csv(preprocessing_audit["source_files"]),
         "schema_mapping_audit.csv": dataframe_csv(preprocessing_audit["schema_mapping"]),
+        "author_name_source_audit.csv": dataframe_csv(deduplication_audit["author_name_sources"]),
         "deduplication_audit.csv": dataframe_csv(deduplication_audit["summary"]),
+        "deduplication_enrichment_by_column.csv": dataframe_csv(
+            deduplication_audit["enrichment_by_column"]
+        ),
+        "deduplication_provenance_combinations.csv": dataframe_csv(
+            deduplication_audit["provenance_combinations"]
+        ),
+        "deduplication_rules.csv": dataframe_csv(deduplication_audit["rules"]),
         "temporal_delimitation_audit.csv": dataframe_csv(temporal_audit),
         "prisma_text_report.txt": text_report.encode("utf-8"),
     }
@@ -186,13 +238,46 @@ def run_ingestion(scopus_files=None, wos_files=None, modes=None, config=None, in
             files[f"stitched_{safe}_export.csv"] = dataframe_csv(verification["combined"])
             files[f"stitched_{safe}_export.xlsx"] = dataframe_excel(verification["combined"], f"Stitched {source}")
     _attach_archive(files, "chronotome_ingestion_outputs.zip", include_archive)
+    input_records_by_database = {
+        str(row["Database"]): int(row["Input records"])
+        for row in preprocessing_audit["source_summary"].to_dict("records")
+    }
+    input_records_by_source_file: dict[str, dict[str, int]] = {}
+    for row in preprocessing_audit["source_files"].to_dict("records"):
+        database_files = input_records_by_source_file.setdefault(str(row["Database"]), {})
+        database_files[str(row["Source File"])] = int(row["Input records"])
+    metadata = {
+        "input_records_by_database": input_records_by_database,
+        "input_records_by_source_file": input_records_by_source_file,
+        "duplicate_groups_fused": int(report.get("duplicate_groups_fused", 0)),
+        "cross_database_duplicate_groups": int(report.get("cross_database_duplicate_groups", 0)),
+        "records_with_multiple_databases": int(report.get("records_with_multiple_databases", 0)),
+        "records_with_multiple_source_files": int(report.get("records_with_multiple_source_files", 0)),
+        "doi_based_fusion_groups": int(report.get("doi_based_fusion_groups", 0)),
+        "title_year_based_fusion_groups": int(report.get("title_year_based_fusion_groups", 0)),
+        "doi_values_changed_by_normalization": int(report.get("doi_values_changed_by_normalization", 0)),
+        "no_doi_complete_title_year": int(report.get("no_doi_complete_title_year", 0)),
+        "retained_missing_title": int(report.get("retained_missing_title", 0)),
+        "retained_missing_year": int(report.get("retained_missing_year", 0)),
+        "retained_missing_title_and_year": int(report.get("retained_missing_title_and_year", 0)),
+        "author_name_sources": deduplication_audit["author_name_sources"].iloc[0].to_dict(),
+        "final_provenance_combinations": deduplication_audit["provenance_combinations"].to_dict("records"),
+    }
+    public_verifications = {
+        source: {
+            "files": verification["files"],
+            "summary": dict(verification["summary"]),
+            "warnings": list(verification["warnings"]),
+        }
+        for source, verification in verifications.items()
+    }
     return {
-        "processed_data": final, "merged_before_deduplication": merged,
-        "duplicate_doi_records": duplicate_doi_records, "prisma": report,
-        "prisma_table": table, "prisma_text": text_report, "verifications": verifications,
+        "processed_data": final, "duplicate_doi_records": duplicate_doi_records, "prisma": report,
+        "prisma_table": table, "prisma_text": text_report, "verifications": public_verifications,
         "preprocessing_audit": preprocessing_audit, "deduplication_audit": deduplication_audit,
         "temporal_audit": temporal_audit,
-        "warnings": list(dict.fromkeys(warnings)), "exports": files, "config": config,
+        "warnings": list(dict.fromkeys(warnings)), "exports": files,
+        "metadata": metadata, "config": config,
     }
 
 
@@ -574,39 +659,23 @@ def run_institutional_community_visualization(
     return {**result, "exports": files}
 
 
-def run_all_workflow(
-    scopus_files=None, wos_files=None, modes=None, config=None,
-    ingestion_result: dict | None = None, progress_callback=None,
+@raster_export_policy(max_dpi=300, max_side_px=4800)
+def run_chronotome(
+    *,
+    scopus_files=None,
+    wos_files=None,
+    modes=None,
+    config: Mapping[str, object] | None = None,
+    ingestion_result: dict | None = None,
+    progress_callback=None,
 ):
-    """Run the complete workflow under a bounded-memory raster policy."""
-    with raster_export_policy(max_dpi=300, max_side_px=4800):
-        return _run_all_workflow_impl(
-            scopus_files=scopus_files, wos_files=wos_files, modes=modes,
-            config=config, ingestion_result=ingestion_result,
-            progress_callback=progress_callback,
-        )
+    """Run the canonical staged workflow through community visualization.
 
-
-def _run_all_workflow_impl(
-    scopus_files=None, wos_files=None, modes=None, config=None,
-    ingestion_result: dict | None = None, progress_callback=None,
-):
-    """Run every modern Chronotome stage through community visualization.
-
-    Individual stage runners remain authoritative, so this convenience path
-    cannot drift from the guided pages' analytical logic.
+    Guided pages call the same stage functions used here. The returned mapping
+    contains the final enriched corpus, compact stage summaries, a manifest,
+    warnings, downloadable workflow artifacts, metadata, and resolved config.
     """
-    config = {
-        "enable_time_filter": True, "collection_year": None,
-        "top_n": 10, "min_source_papers": 5,
-        "country_min_papers": 5, "institutional_top_n_plot": 30,
-        "max_institutions_per_paper": 50,
-        "topic_k_values": list(range(3, 11)), "thematic_min_df": None,
-        "topic_model_min_df": 2, "topic_bin_duration": 5,
-        "run_topic_institutional": True,
-        "community_top_n_global": 50, "community_top_n_eu": 30,
-        **(config or {}),
-    }
+    config = resolve_config(config)
     stage_summaries: dict[str, dict] = {}
     manifest_rows: list[dict] = []
     warnings: list[str] = []
@@ -668,104 +737,130 @@ def _run_all_workflow_impl(
     else:
         # Never mutate a guided-page result supplied from session state.
         ingestion = {**ingestion_result, "exports": dict(ingestion_result.get("exports", {}))}
+    ingestion_data = ingestion["processed_data"]
+    ingestion_documents = len(ingestion_data)
     record("01_ingestion", "Data ingestion", ingestion)
-    notify("Data ingestion", "complete", f"{len(ingestion['processed_data']):,} records")
+    notify("Data ingestion", "complete", f"{ingestion_documents:,} records")
+    ingestion_metadata = dict(ingestion.get("metadata", {}))
+    del ingestion
+    gc.collect()
 
     notify("Entity resolution", "running")
-    entity = run_entity_resolution(ingestion["processed_data"], include_archive=False)
+    entity = run_entity_resolution(ingestion_data, include_archive=False)
+    del ingestion_data
+    entity_data = entity["article_summary"]
+    entity_documents = len(entity_data)
     record("02_entity_resolution", "Entity resolution", entity)
-    notify("Entity resolution", "complete", f"{len(entity['article_summary']):,} articles")
-    del ingestion
+    notify("Entity resolution", "complete", f"{entity_documents:,} articles")
+    del entity
     gc.collect()
 
     notify("Corpus and production", "running")
     corpus = run_corpus_bibliometrics(
-        entity["article_summary"], cutoff_year=config["collection_year"],
+        entity_data, cutoff_year=config["collection_year"],
         top_n=int(config["top_n"]), min_source_papers=int(config["min_source_papers"]),
+        max_source_title_length=int(config["max_source_title_length"]),
         include_archive=False,
     )
+    del entity_data
+    corpus_data = corpus["data"]
     record("03_corpus_and_production", "Corpus and production", corpus)
     notify("Corpus and production", "complete")
-    del entity
+    del corpus
     gc.collect()
 
     notify("Geographic analysis", "running")
     geographic = run_geographic_bibliometrics(
-        corpus["data"], min_papers=int(config["country_min_papers"]),
+        corpus_data, min_papers=int(config["country_min_papers"]),
         advanced_min_publications=int(config["country_min_papers"]),
         include_archive=False,
     )
+    del corpus_data
+    geographic_data = geographic["data"]
     record("04_geographic_analysis", "Geographic analysis", geographic)
     notify("Geographic analysis", "complete")
-    del corpus
+    processed_data = geographic_data
+    del geographic
     gc.collect()
 
     notify("Advanced evaluative analyses", "running")
     advanced = run_advanced_analyses(
-        geographic["data"], include_archive=False, include_dataset=False
+        geographic_data, include_archive=False, include_dataset=False
     )
     record("05_advanced_evaluative", "Advanced evaluative analyses", advanced)
     notify("Advanced evaluative analyses", "complete")
     del advanced
     gc.collect()
 
-    thematic_final = None
+    thematic_input = None
+    thematic_final_data = None
     notify("Thematic preprocessing", "running")
     try:
         thematic_preprocessed = run_thematic_preprocessing(
-            geographic["data"], "", DEFAULT_NOISE_LISTS, DEFAULT_BLOCKLIST_PHRASES,
+            geographic_data, "", DEFAULT_NOISE_LISTS, DEFAULT_BLOCKLIST_PHRASES,
             min_df=config["thematic_min_df"], include_archive=False,
             include_dataset=False,
         )
+        thematic_input = thematic_preprocessed["data"]
         record("06_thematic_preprocessing", "Thematic preprocessing", thematic_preprocessed)
         notify("Thematic preprocessing", "complete")
+        del thematic_preprocessed
+        gc.collect()
 
         notify("Automatic topic evaluation", "running")
         topic_evaluation = run_topic_model_evaluation(
-            thematic_preprocessed["data"], config["topic_k_values"],
+            thematic_input, config["topic_k_values"],
             min_df=int(config["topic_model_min_df"]), include_archive=False,
         )
+        best_k = topic_evaluation["best_k"]
+        best_nmf_k = topic_evaluation["best_nmf_k"]
         record("07_topic_evaluation", "Automatic topic evaluation", topic_evaluation)
         notify(
             "Automatic topic evaluation", "complete",
-            f"LDA k={topic_evaluation['best_k']}; NMF k={topic_evaluation['best_nmf_k']}",
+            f"LDA k={best_k}; NMF k={best_nmf_k}",
         )
+        del topic_evaluation
+        gc.collect()
 
         notify("Final topic models", "running")
         thematic_final = run_final_topic_models(
-            thematic_preprocessed["data"], topic_evaluation["best_k"],
-            topic_evaluation["best_nmf_k"],
+            thematic_input, best_k, best_nmf_k,
             bin_duration=int(config["topic_bin_duration"]),
             min_df=int(config["topic_model_min_df"]),
             include_archive=False,
         )
+        thematic_input = None
+        thematic_final_data = thematic_final["data"]
         record("08_final_topic_models", "Final LDA/NMF topic models", thematic_final)
         notify("Final topic models", "complete")
-        del thematic_preprocessed, topic_evaluation
+        processed_data = thematic_final_data
+        del thematic_final
         gc.collect()
 
         notify("Advanced thematic analyses", "running")
         thematic_advanced = run_advanced_thematic_analysis(
-            thematic_final["data"], include_archive=False, include_dataset=False
+            thematic_final_data, include_archive=False, include_dataset=False
         )
         record("09_advanced_thematic", "Advanced thematic analyses", thematic_advanced)
         notify("Advanced thematic analyses", "complete")
         del thematic_advanced
         gc.collect()
-    except Exception as exc:
+    except ValueError as exc:
         detail = f"Thematic branch skipped after an analysis constraint: {exc}"
         warnings.append(detail)
         record("06_thematic_status", "Thematic analysis", None, status="Skipped", detail=detail)
         notify("Thematic analysis", "skipped", str(exc))
+        thematic_input = None
+        gc.collect()
 
-    if thematic_final is not None and bool(config["run_topic_institutional"]):
-        topics = sorted(thematic_final["data"]["Dominant_Topic"].dropna().unique(), key=lambda value: str(value))
+    if thematic_final_data is not None and bool(config["run_topic_institutional"]):
+        topics = sorted(thematic_final_data["Dominant_Topic"].dropna().unique(), key=lambda value: str(value))
         for topic in topics:
             label = f"Topic {topic} institutional network"
             notify(label, "running")
             try:
                 topic_result = run_topic_institutional_analysis(
-                    thematic_final["data"], topic,
+                    thematic_final_data, topic,
                     top_n_plot=min(25, int(config["institutional_top_n_plot"])),
                     max_institutions_per_paper=int(config["max_institutions_per_paper"]),
                     include_archive=False, include_dataset=False,
@@ -775,11 +870,16 @@ def _run_all_workflow_impl(
                 notify(label, "complete")
                 del topic_result
                 gc.collect()
-            except Exception as exc:
+            except ValueError as exc:
                 detail = str(exc)
                 record(f"10_topic_{topic}_status", label, None, status="Skipped", detail=detail)
                 warnings.append(f"{label} skipped: {detail}")
                 notify(label, "skipped", detail)
+
+    analysis_data = processed_data
+    del geographic_data
+    thematic_final_data = None
+    gc.collect()
 
     analysis_names = ("Global_All", "Global_MCP", "Global_SCP", "EU_All", "EU_MCP", "EU_SCP")
     for index, analysis_name in enumerate(analysis_names, 1):
@@ -787,14 +887,14 @@ def _run_all_workflow_impl(
         notify(label, "running")
         try:
             institutional = run_institutional_analysis(
-                geographic["data"], analysis_name=analysis_name,
+                analysis_data, analysis_name=analysis_name,
                 top_n_plot=int(config["institutional_top_n_plot"]),
                 max_institutions_per_paper=int(config["max_institutions_per_paper"]),
                 include_archive=False, include_dataset=False,
             )
             record(f"{20 + index:02d}_institutional_{analysis_name}", label, institutional)
             notify(label, "complete")
-        except Exception as exc:
+        except ValueError as exc:
             detail = str(exc)
             record(f"{20 + index:02d}_institutional_{analysis_name}", label, None, status="Skipped", detail=detail)
             warnings.append(f"{label} skipped: {detail}")
@@ -813,17 +913,17 @@ def _run_all_workflow_impl(
             )
             record(f"{30 + index:02d}_communities_{analysis_name}", community_label, community)
             notify(community_label, "complete")
-            del community, institutional
-            gc.collect()
-        except Exception as exc:
+            del community
+        except ValueError as exc:
             detail = str(exc)
             record(f"{30 + index:02d}_communities_{analysis_name}", community_label, None, status="Skipped", detail=detail)
             warnings.append(f"{community_label} skipped: {detail}")
             notify(community_label, "skipped", detail)
+        finally:
+            del institutional
+            gc.collect()
 
-    if thematic_final is not None:
-        del thematic_final
-    del geographic
+    del analysis_data
     gc.collect()
 
     manifest = pd.DataFrame(manifest_rows)
@@ -838,6 +938,7 @@ def _run_all_workflow_impl(
             "Each stage folder contains its Excel/CSV tables, publication-grade plots, and network files.\n"
         ).encode("utf-8"),
     )
+    included_files += 3
     archive.close()
     exports = {
         "chronotome_complete_background_workflow.zip": archive_buffer.getvalue(),
@@ -845,99 +946,14 @@ def _run_all_workflow_impl(
     }
     notify("Complete workflow", "complete", f"{included_files:,} files packaged")
     return {
+        "processed_data": processed_data,
         "stages": stage_summaries, "manifest": manifest,
         "warnings": list(dict.fromkeys(warnings)), "exports": exports,
         "metadata": {
             "packaged_files": included_files,
-            "documents": int(manifest.loc[manifest["Stage"] == "Geographic analysis", "Documents"].iloc[0]),
+            "documents": len(processed_data),
             "final_rss_mb": round(_rss_megabytes(), 1),
+            "ingestion": ingestion_metadata,
         },
-        "config": config,
-    }
-
-
-def run_chronotome(uploaded_file, config=None):
-    """Run ingestion, harmonization, analyses, plots, and in-memory exports.
-
-    Parameters
-    ----------
-    uploaded_file:
-        One Streamlit UploadedFile or a list of Scopus/WoS CSV, TXT, XLS, or
-        XLSX exports. Multiple files from the same database are appended.
-    config:
-        Existing notebook parameters exposed by the app: time filter,
-        collection year, ranking size, source/country minimum publications,
-        network plot size, institution cap, and thematic topic settings.
-
-    Returns
-    -------
-    dict
-        Processed data, tables, figures, warnings, metadata, network objects,
-        PRISMA counts, and downloadable byte files.
-    """
-    config = {
-        "enable_time_filter": True, "collection_year": None, "top_n": 10,
-        "min_papers": 5, "network_top_n": 30, "max_institutions_per_paper": 50,
-        "run_thematic": True, "topic_count": 8, "min_document_frequency": None,
-        **(config or {}),
-    }
-    metadata = inspect_uploads(uploaded_file)
-    loaded = load_uploads(uploaded_file)
-    sources = combine_by_source(loaded)
-    merged, prisma, warnings = harmonize(sources)
-    processed, duplicate_records = deduplicate(merged, prisma)
-    processed = apply_time_filter(processed, config["enable_time_filter"], config["collection_year"], prisma)
-    if processed.empty:
-        raise ValueError("No records remain after preprocessing. Disable the year filter or check publication years.")
-    processed, affiliations, affiliation_warnings = enrich_affiliations(processed)
-    warnings.extend(affiliation_warnings)
-    processed = add_mncs(processed)
-
-    sources_table = source_metrics(processed)
-    countries, country_timeline = country_metrics(processed)
-    networks, network_summary = institution_networks(processed, config["max_institutions_per_paper"])
-    tables = {
-        "prisma_report": prisma_table(prisma),
-        "main_information_summary": main_summary(processed),
-        "document_types": document_types(processed),
-        "annual_production": annual_production(processed),
-        "citation_dynamics": citation_dynamics(processed),
-        "author_metrics": author_metrics(processed),
-        "source_metrics": sources_table,
-        "country_metrics": countries,
-        "country_publication_timeline": country_timeline,
-        "affiliations_exploded": affiliations,
-        "duplicate_doi_records": duplicate_records,
-        "articles_ranked_by_citations": ranked_articles(processed),
-        "hot_papers": hot_papers(processed),
-        "bradford": bradford_table(sources_table),
-        "team_size_impact": team_size_impact(processed),
-        "institution_network_summary": network_summary,
-    }
-    for key, network in networks.items():
-        tables[f"institutions_{key.lower()}"] = network["ranking"]
-        tables[f"institution_edges_{key.lower()}"] = network["edges"]
-        tables[f"institution_communities_{key.lower()}"] = pd.DataFrame(
-            [(index, len(nodes), "; ".join(nodes)) for index, nodes in enumerate(network["communities"], 1)],
-            columns=["Community", "Size", "Institutions"],
-        )
-    if config["run_thematic"]:
-        thematic_tables, thematic_warnings = thematic_analysis(
-            processed, config["topic_count"], config["min_document_frequency"]
-        )
-        tables.update(thematic_tables)
-        warnings.extend(thematic_warnings)
-    figures = build_figures(tables, networks, config)
-    exports = create_exports(processed, tables, figures)
-    release_figures(figures.values())
-    return {
-        "processed_data": processed,
-        "tables": tables,
-        "figures": figures,
-        "warnings": list(dict.fromkeys(warnings)),
-        "metadata": metadata,
-        "prisma": prisma,
-        "networks": networks,
-        "exports": exports,
         "config": config,
     }
