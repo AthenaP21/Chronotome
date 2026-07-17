@@ -31,10 +31,7 @@ LIGHT = {
 }
 
 def logo_path() -> Path:
-    """Return the bundled logo, with repository paths retained for development."""
-    packaged = Path(__file__).with_name("chronotome-logo.png")
-    if packaged.exists():
-        return packaged
+    """Return the first available repository or installed-package logo."""
     root = Path(__file__).resolve().parents[1]
     candidates = (
         Path(__file__).with_name("chronotome-logo.png"),

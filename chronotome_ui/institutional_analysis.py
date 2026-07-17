@@ -272,7 +272,7 @@ def render_institutional_analysis():
             st.error(f"An unexpected institution value stopped the analysis: {exc}")
     if not current:
         _render_network_comparison(cache, dataset_signature, section_number=3)
-        st.caption("Choose a scope and settings, then generate its institutional network when you are ready.")
+        st.caption("Choose a scope and settings, then select Generate institutional network.")
         return
     result = cache[analysis_name]["result"]
     st.session_state["institutional-active-signature"] = signature
