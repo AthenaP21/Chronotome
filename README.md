@@ -69,86 +69,236 @@ python -m pip install --upgrade pip
 
 ### 4. Install Chronotome from PyPI
 
-Chronotome is installable as a local Python package. Python 3.11 is recommended.
+```bash
+python -m pip install chronotome
+```
+
+Confirm the installed version and location:
 
 ```bash
-git clone https://github.com/AthenaP21/Chronotome.git
-cd Chronotome
-python3.11 -m venv .venv
-source .venv/bin/activate              # Windows: .venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install --only-binary=:all: .
+python -m pip show chronotome
+chronotome --help
+```
+
+### 5. Start Chronotome
+
+```bash
 chronotome
 ```
 
-The `chronotome` command starts the app at `http://127.0.0.1:8501`; it is deliberately limited to the local machine. Use `chronotome --port 8502` if port 8501 is already occupied. For local development, the familiar command remains available:
+Chronotome opens at `http://127.0.0.1:8501`. If the browser does not open, enter that address manually. Keep the terminal open while the application is running and press `Ctrl+C` to stop it.
+
+Alternative commands:
 
 ```bash
-pip install -r requirements.txt
-streamlit run app.py --server.address 127.0.0.1
+python -m chronotome
+chronotome --port 8502
+chronotome --no-browser
 ```
 
-No notebook interface or local data paths are required. All uploaded and generated files are handled in memory. See the in-app **Local installation** page and [SECURITY.md](SECURITY.md) for the installation and release-safety guidance.
+### Open Chronotome again later
+
+Activate the same virtual environment before starting the application.
+
+On macOS or Linux:
+
+```bash
+source .venv/bin/activate
+chronotome
+```
+
+On Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+chronotome
+```
+
+### Upgrade Chronotome
+
+```bash
+python -m pip install --upgrade chronotome
+```
+
+### Uninstall Chronotome
+
+```bash
+python -m pip uninstall chronotome
+```
+
+## Application pages
+
+### Home
+
+Introduces the workflow, principal outputs, Zenodo record, institution alias resource, and suggested citation.
 
 ### Local installation
 
-- **Home** introduces Chronotome, its expected outputs, the Zenodo open-science release, the bundled institution aliases, and the suggested citation.
-- **Data ingestion** provides separate Scopus and WoS configuration, Single file and Appendage modes, upload verification, deterministic preprocessing, schema harmonization, deduplication, textual PRISMA reporting, and final CSV/Excel/ZIP downloads.
-- **Entity resolution** explodes affiliations, standardizes institutions and countries, accepts the bundled or an uploaded `institutions.json`, reports alias conflicts and unresolved geography, and exports affiliation/article-level tables.
-- **Corpus & production** uses the current entity-resolved article summary and starts only when **Generate corpus analysis** is selected. It reproduces notebook sections 9 and 11–16: corpus characteristics, internal MNCS, document typology, author productivity/contribution, annual growth, citation dynamics, and local journal/source impact.
-- **Geographic analysis** starts only when **Generate geographic analysis** is selected. It reproduces notebook Sections 17–18 and 20–21: country distribution, SCP/MCP collaboration, country MNCS, citation prestige, the productivity-impact matrix, the international collaboration network, and clickable country case studies.
-- **Advanced analyses** runs after the geographic phase and produces the final paper-ready dataset summary, article and author impact rankings, Bradford scattering, hot papers, team-size impact, and the journal landscape.
-- **Thematic analysis** uses the current geographic dataset or prepares one uploaded Chronotome dataset in the background. It provides staged NLTK setup, optional query-term removal, visible editable noise-list categories, 1–4 gram extraction and word clouds, automatic LDA/NMF topic selection, longitudinal topic evolution, topic impact/co-occurrence, canonical papers, and country specialization.
-- **Institutional analysis** uses the current geographic dataset or the unchanged `article_summary_with_country_classification` handoff file. Choose one Global/EU × All/MCP/SCP scope and select **Generate institutional network** to create it. Completed scopes can be compared side by side using their original network graphs; the page also offers community visualizations, GraphML/CSV/Excel exports, and optional topic-specific networks.
-- **Full workflow** provides a single **Run all workflow** action. It starts from raw Scopus/WoS files or the current ingestion result, executes every modern stage through all six institutional community visualizations, and returns one structured ZIP containing the workflow's Excel files, plots, network exports, and manifest.
-  The background runner streams stage artifacts directly into the master archive, releases completed figures and graphs, avoids nested ZIP/dataset duplication, and records process-memory usage after every stage.
-- **Local installation** is a step-by-step guide to installing, launching, updating, and securing Chronotome on your own computer.
+Lists the PyPI installation, update, launch, and removal commands for macOS, Linux, and Windows. This page is the second item in the sidebar.
+
+### Data ingestion
+
+Loads Scopus and Web of Science exports in single-file or split-export mode. It verifies filenames and schemas, harmonizes database fields, preprocesses author and reference data, fuses duplicate records, applies the optional collection-year cutoff, reports PRISMA-style counts, and exports the processed corpus.
+
+### Entity resolution
+
+Resolves affiliation strings into institution and country fields. It uses the bundled institution alias file or a user-supplied `institutions.json`, reports alias conflicts and unresolved values, and exports affiliation-level and article-level tables.
+
+### Corpus & production
+
+Uses the current entity-resolved article dataset. Configure the corpus settings and select **Generate corpus analysis** to calculate corpus descriptors, MNCS, document types, author indicators, annual production, citation dynamics, and source indicators.
+
+### Geographic analysis
+
+Uses the current corpus dataset. Configure the country settings and select **Generate geographic analysis** to calculate country output, SCP/MCP collaboration, country impact, citation distributions, the performance matrix, and the international collaboration network. Country names in the results open a country profile.
+
+### Advanced analyses
+
+Produces the final dataset summary, most-cited article and author rankings, Bradford scattering, recent highly cited papers, team-size citation analysis, and the source productivity-impact landscape.
+
+### Thematic analysis
+
+Uses the current geographic-analysis dataset or an uploaded Chronotome dataset. It provides editable noise-word lists, optional removal of database search terms, n-gram tables and word clouds, automatic LDA and NMF topic-count evaluation, final topic models, topic evolution, topic impact, topic co-occurrence, representative papers, and country specialization.
+
+### Institutional analysis
+
+Uses the current geographic dataset or the geographic-analysis handoff file. Choose one of six scopes: Global All, Global MCP, Global SCP, EU All, EU MCP, or EU SCP. Select **Generate institutional network** to produce the institution ranking and collaboration graph. Completed scopes can be compared side by side. Community and topic-specific institutional views are available from the same page.
+
+### Full workflow
+
+Runs the sequence from data ingestion through institutional community figures. Select **Run all workflow** to execute the analyses and download one ZIP containing tables, figures, network files, the enriched dataset, and the workflow manifest.
 
 ## Input files
 
-Upload one or more exports in `.csv`, `.txt`, `.xls`, or `.xlsx` format:
+Chronotome accepts Scopus and Web of Science exports in these formats:
 
-- Scopus CSV is recommended. The app recognizes fields such as `Title`, `Source title`, `Year`, `Cited by`, `Authors`, and `Affiliations`.
-- Web of Science tab-delimited TXT, CSV, XLS, and XLSX are supported. WoS files with an `.xls` extension that are actually tab-delimited text use the notebook's fallback parser.
-- Tagged WoS plain text (`PT`, `AU`, `TI`, …, `ER`) is also parsed.
-- Split files from the same database can be uploaded together and are appended before harmonization.
-- At minimum, the export must contain the source-specific title field (`Title` for Scopus or `Article Title` for WoS). Full records with cited references are strongly recommended.
+- `.csv`
+- `.txt`
+- `.xls`
+- `.xlsx`
 
-The app detects the database from the export columns. It does not infer or fetch missing records from external services.
+Scopus CSV and Web of Science tab-delimited TXT are the preferred formats. Web of Science tagged plain text is also recognized. Some Web of Science exports use an `.xls` filename for tab-delimited text; Chronotome checks the file content before selecting the reader.
 
-In **Appendage** mode, files must represent one numbered split-export series, such as `query_1.csv`, `query_2.csv`, and `query_3.csv`. Chronotome verifies the common base name and extension, checks for duplicate or missing part numbers, and sorts parts numerically before stacking them. Scopus and WoS appendages are always processed separately.
+At minimum, each source file must contain its database-specific title field. Complete records should include:
 
-## Supported workflow
+- article title;
+- authors and full author names;
+- publication year;
+- source title;
+- document type;
+- DOI;
+- citation count;
+- affiliations and addresses;
+- abstract;
+- author keywords;
+- Keywords Plus or indexed keywords;
+- cited references or cited-reference count.
 
-The Streamlit app preserves the notebook's current methods:
+### Single-file mode
 
-- Scopus/WoS schema mapping and merged common schema
-- author-name and cited-reference preprocessing
-- preprocessing audit tables for author delimiter changes, removed Scopus IDs, parsed references, and mapped fields
-- DOI normalization, citation-prioritized DOI data fusion, and title/year deduplication for records without DOI
-- optional collection-year cutoff for indexing-lag correction
-- PRISMA-style identification, screening, and included counts
-- notebook-style textual PRISMA report with an arithmetic integrity check (no PRISMA diagram)
-- curated institution alias resolution using `chronotome_core/institutions.json`
-- optional runtime upload of a manually updated or newer Zenodo `institutions.json`; uploaded JSON is validated and treated as authoritative
-- affiliation-based institution and country extraction, including SCP/MCP classification
-- internal year-normalized citation score (MNCS relative to the uploaded corpus)
-- corpus summary, annual production, citation dynamics, and document-type taxonomy
-- author full/fractional counts, citations, MNCS, and local h-index
-- source productivity and local h-, g-, m-index and MNCS rankings, with the notebook's composite and prestige-versus-efficiency figures
-- country-level full-counted production, SCP/MCP collaboration shares, total citations, and internal MNCS rankings
-- advanced country citation distribution, productivity-impact matrix, and weighted international collaboration topology
-- click-to-open country case studies with temporal dashboards and statistical field-guide exports
-- final corpus summary plus advanced article, author, source, Bradford, hot-paper, and collaboration-impact outputs
-- most-cited articles, recent highly cited papers, Bradford scattering, and team-size impact
-- country productivity, collaboration, impact, and temporal tables
-- Global and EU-only institutional networks for All, MCP, and SCP records
-- optional topic-level institutional collaboration networks after LDA modeling
-- one-click background execution from ingestion through six institutional community visualizations, with a consolidated non-nested ZIP package
-- unigram, bigram, trigram, quadgram, LDA/NMF evaluation, topic-assignment, and topic-evolution tables
-- CSV, Excel, 600-DPI PNG, vector SVG/PDF, and complete ZIP exports
+Use this mode when one file contains the complete export from a database. Scopus-only, Web of Science-only, and combined Scopus/Web of Science workflows are accepted.
 
-The main entry point is:
+### Split-export mode
+
+Use this mode when a database export was divided into numbered files. Files must share the same base name and extension, with a continuous numeric suffix such as:
+
+```text
+query_1.csv
+query_2.csv
+query_3.csv
+```
+
+Scopus and Web of Science split series are checked and combined separately.
+
+## Workflow
+
+Chronotome implements the following operations from the project notebook:
+
+1. File verification and source detection.
+2. Single-file and split-export ingestion.
+3. Scopus and Web of Science schema harmonization.
+4. Author-name preprocessing and row-level full-name fallback.
+5. Cited-reference preservation and reference counting.
+6. DOI normalization.
+7. Citation-prioritized duplicate fusion.
+8. Title-year matching for no-DOI records with complete matching fields.
+9. Collection-year filtering for indexing lag.
+10. PRISMA-style record accounting.
+11. Institution and country resolution.
+12. Corpus characteristics and production trends.
+13. Corpus-internal year-normalized citation scores.
+14. Document-type, author, source, and citation indicators.
+15. Country productivity, SCP/MCP collaboration, impact, and networks.
+16. Final corpus summary and article, author, source, Bradford, hot-paper, and team-size analyses.
+17. N-gram extraction and word clouds.
+18. Automatic LDA and NMF topic-count evaluation.
+19. Topic assignment, evolution, impact, co-occurrence, representative papers, and country specialization.
+20. Global and EU institutional networks for All, MCP, and SCP publications.
+21. Topic-specific institutional networks.
+22. Seeded single-pass institutional community figures.
+
+Tables are exported as CSV and Excel files. Figures retain the notebook layouts and are exported as PNG, SVG, and PDF where applicable. Institutional networks also include GraphML, node tables, and edge tables.
+
+## Notebook parallels
+
+The bundled [`chronotome.ipynb`](chronotome.ipynb) remains the complete notebook edition. The application organizes its implemented methods as follows:
+
+| Application page | Notebook sections |
+|---|---|
+| Data ingestion | Phase 1, Sections 1-7 |
+| Entity resolution | Section 8 |
+| Corpus & production | Part 2, Sections 9-16 |
+| Geographic analysis | Sections 17-18 and the country-profile elements of Section 20 |
+| Advanced analyses | Final Summary, Core Impact Analyses, and Advanced Visualizations |
+| Thematic analysis | Part 3, Sections 21-25 |
+| Institutional analysis | Part 4, Sections 26-27, thematic-institutional networks, and community visualization |
+| Full workflow | The implemented application sequence above |
+
+The notebook also contains analyses that remain notebook-only:
+
+- longitudinal country productivity cohorts;
+- standalone statistical country-report generation;
+- repeated institutional network validation, consensus clustering, resampling, null models, stability statistics, and NMI analysis.
+
+These notebook sections can be used when their additional computational requirements and manual controls are appropriate for a study.
+
+## Data preparation details
+
+### Database and file provenance
+
+The processed dataset records:
+
+- `Primary Database`: the source of the record selected during duplicate fusion;
+- `Databases`: all databases represented in a fused record;
+- `Source Files`: the input filenames represented in a fused record.
+
+Only filename basenames are retained. Local directory paths are not included in exported provenance.
+
+### Duplicate fusion
+
+DOI values are normalized for resolver prefixes, labels, case, whitespace, and trailing citation punctuation. Records sharing a normalized DOI can be fused. Records without a DOI are matched only when both normalized title and publication year are available.
+
+Within a duplicate group, the record with the highest citation count is selected first. Original row order resolves citation ties. Missing fields in that record may be filled from other records in the same group.
+
+### Cited references
+
+`Cited References Raw` retains the exported reference text. `Cited Reference Count` retains a valid database count or derives the number of non-empty semicolon-delimited references when a count is unavailable.
+
+### MNCS
+
+Chronotome defines `MNCS` as the corpus-internal year-normalized citation score:
+
+> A paper's citation count divided by the mean citation count of retained Chronotome corpus papers from the same publication year.
+
+Zero-citation papers are included in the yearly mean. MNCS is undefined when the publication year or citation count is missing, or when the same-year citation mean is zero. Undefined values remain missing in tables and exports.
+
+### Authors and entities
+
+For each paper, Chronotome uses `Author Full Names` when available and falls back to `Authors` for that row. Institution names are standardized during entity resolution. Country aliases are resolved consistently throughout the workflow; for example, `Czech Republic`, `Czech Rep.`, and `Czechia` are reported as `Czechia`.
+
+## Python API
+
+The full workflow is available through:
 
 ```python
 from chronotome import run_chronotome
