@@ -8,15 +8,6 @@ import subprocess
 import sys
 
 
-_DARK_THEME_ARGS = (
-    "--theme.base=dark",
-    "--theme.primaryColor=#C6A04A",
-    "--theme.backgroundColor=#102720",
-    "--theme.secondaryBackgroundColor=#17352F",
-    "--theme.textColor=#F7F3E8",
-)
-
-
 def _port(value: str) -> int:
     """Validate a user-selected localhost port."""
     try:
@@ -55,6 +46,5 @@ def main(argv: list[str] | None = None) -> int:
             f"--server.port={options.port}",
             "--browser.gatherUsageStats=false",
             f"--server.headless={'true' if options.no_browser else 'false'}",
-            *_DARK_THEME_ARGS,
         ]
         return subprocess.call(command)

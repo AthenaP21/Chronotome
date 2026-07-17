@@ -51,7 +51,6 @@ class ChronotomeLocalLauncherTest(unittest.TestCase):
         self.assertIn("--server.address=127.0.0.1", command)
         self.assertIn("--server.port=8601", command)
         self.assertIn("--server.headless=true", command)
-        self.assertIn("--theme.base=dark", command)
         self.assertNotIn("0.0.0.0", " ".join(command))
 
     def test_launcher_rejects_unrecognised_streamlit_arguments(self):

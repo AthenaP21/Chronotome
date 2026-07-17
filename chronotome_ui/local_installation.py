@@ -1,4 +1,4 @@
-"""Installation and command reference for the published Chronotome package."""
+"""User-facing guidance for running Chronotome privately on a local computer."""
 
 from __future__ import annotations
 
@@ -6,98 +6,89 @@ import streamlit as st
 
 
 def render_local_installation() -> None:
-    """Display installation, update, launch, and removal commands."""
-    st.title("Install Chronotome locally")
+    """Render practical, security-conscious local installation guidance."""
+    st.title("Chronotome Local Studio")
     st.markdown(
-        "Chronotome is available from the Python Package Index (PyPI). "
-        "The application runs at `http://127.0.0.1:8501` on your computer."
-    )
-    st.link_button(
-        "View Chronotome on PyPI",
-        "https://pypi.org/project/chronotome/",
+        "Run Chronotome privately on your own computer. Your bibliographic files stay on "
+        "your machine and the local launcher binds the app to **127.0.0.1** only."
     )
 
-    st.markdown("## 1. Check Python 3.11")
-    st.markdown("### macOS or Linux")
-    st.code("python3.11 --version", language="bash")
-    st.markdown("### Windows")
-    st.code("py -3.11 --version", language="powershell")
-    st.write(
-        "The command should print a version beginning with `Python 3.11`. "
-        "If it is not available, install Python 3.11 from "
-        "[python.org](https://www.python.org/downloads/) and reopen the terminal."
+    st.info(
+        "Recommended setup: Python 3.11, a virtual environment, and a copy of the official "
+        "Chronotome repository or release."
     )
 
-    st.markdown("## 2. Create a virtual environment")
-    st.markdown("A virtual environment keeps Chronotome and its dependencies separate from other Python projects.")
-    macos, windows = st.columns(2)
-    with macos:
-        st.markdown("### macOS or Linux")
-        st.code(
-            "python3.11 -m venv .venv\n"
-            "source .venv/bin/activate\n"
-            "python --version",
-            language="bash",
-        )
-    with windows:
-        st.markdown("### Windows PowerShell")
-        st.code(
-            "py -3.11 -m venv .venv\n"
-            ".venv\\Scripts\\Activate.ps1\n"
-            "python --version",
-            language="powershell",
-        )
-    st.caption("After activation, `python --version` should report Python 3.11.x.")
-
-    st.markdown("## 3. Update pip")
+    st.markdown("## 1. Get a trusted copy")
+    st.markdown(
+        "Download a tagged release from the official Chronotome GitHub repository, or clone it "
+        "over HTTPS. Avoid ZIP files, installers, or commands shared by unknown forks."
+    )
     st.code(
-        "python -m pip --version\n"
-        "python -m pip install --upgrade pip",
+        "git clone https://github.com/AthenaP21/Chronotome.git\n"
+        "cd Chronotome",
+        language="bash",
+    )
+    st.caption(
+        "If a release includes a checksum or signed tag, verify it before installing. "
+        "Only maintainers with reviewed repository access can publish official releases."
+    )
+
+    st.markdown("## 2. Install on macOS or Linux")
+    st.code(
+        "python3.11 -m venv .venv\n"
+        "source .venv/bin/activate\n"
+        "python -m pip install --upgrade pip\n"
+        "python -m pip install --only-binary=:all: .",
         language="bash",
     )
 
-    st.markdown("## 4. Install Chronotome")
+    st.markdown("## 3. Install on Windows")
     st.code(
-        "python -m pip install chronotome\n"
-        "python -m pip show chronotome",
-        language="bash",
+        "py -3.11 -m venv .venv\n"
+        ".venv\\Scripts\\Activate.ps1\n"
+        "python -m pip install --upgrade pip\n"
+        "python -m pip install --only-binary=:all: .",
+        language="powershell",
     )
-    st.write("`pip show` prints the installed version and installation location.")
+    st.caption(
+        "If PowerShell blocks activation, open PowerShell as your own user and run "
+        "`Set-ExecutionPolicy -Scope Process RemoteSigned`, then activate the environment again."
+    )
 
-    st.markdown("## 5. Start Chronotome")
+    st.markdown("## 4. Start Chronotome")
     st.code("chronotome", language="bash")
     st.write(
-        "Open `http://127.0.0.1:8501` if the browser does not open automatically. "
-        "Keep the terminal open while using the application and press `Ctrl+C` to stop it."
+        "The launcher opens Chronotome at `http://127.0.0.1:8501`. Leave the terminal open while "
+        "you work; use `Ctrl+C` there to stop the app."
     )
-    with st.expander("Alternative launch commands"):
+    with st.expander("Alternative: start the Streamlit file directly"):
         st.code(
-            "python -m chronotome\n"
-            "chronotome --port 8502\n"
-            "chronotome --no-browser",
+            "streamlit run app.py --server.address 127.0.0.1 --server.port 8501",
             language="bash",
         )
 
-    st.markdown("## Update Chronotome")
-    st.code("python -m pip install --upgrade chronotome", language="bash")
+    st.markdown("## Everyday use")
+    first, second = st.columns(2)
+    with first:
+        st.markdown("### macOS / Linux")
+        st.code("cd Chronotome\nsource .venv/bin/activate\nchronotome", language="bash")
+    with second:
+        st.markdown("### Windows")
+        st.code("cd Chronotome\n.venv\\Scripts\\Activate.ps1\nchronotome", language="powershell")
 
-    st.markdown("## Uninstall Chronotome")
-    st.code("python -m pip uninstall chronotome", language="bash")
-
-    st.markdown("## Open Chronotome again later")
-    macos, windows = st.columns(2)
-    with macos:
-        st.markdown("### macOS or Linux")
-        st.code("source .venv/bin/activate\nchronotome", language="bash")
-    with windows:
-        st.markdown("### Windows PowerShell")
-        st.code(".venv\\Scripts\\Activate.ps1\nchronotome", language="powershell")
-
-    st.markdown("## Troubleshooting")
+    st.markdown("## Privacy and security")
     st.markdown(
-        "- **`python3.11` is not found on macOS or Linux:** install Python 3.11, then reopen the terminal.\n"
-        "- **`py -3.11` is not found on Windows:** install Python 3.11 and enable the Python launcher during setup.\n"
-        "- **PowerShell blocks activation:** run `Set-ExecutionPolicy -Scope Process RemoteSigned`, then activate the environment again.\n"
-        "- **Port 8501 is already in use:** run `chronotome --port 8502`.\n"
-        "- **The `chronotome` command is not found:** reactivate the virtual environment and run `python -m pip show chronotome`."
+        "- The local launcher accepts only `127.0.0.1`, so the app is not exposed to your local network.\n"
+        "- Chronotome does not require API keys and does not upload your corpus to a remote service.\n"
+        "- The package uses standard static Python packaging metadata—there is no custom install script or shell command execution.\n"
+        "- Install into a dedicated virtual environment and keep your operating system, Python, and packages updated.\n"
+        "- Do not install a modified copy of Chronotome unless you trust and review its source code."
+    )
+
+    st.markdown("## If something goes wrong")
+    st.markdown(
+        "- **`python3.11` or `py -3.11` is not found:** install Python 3.11 from python.org, then reopen the terminal.\n"
+        "- **Port 8501 is busy:** start with `chronotome --port 8502`.\n"
+        "- **A binary package is unavailable:** remove `--only-binary=:all:` only after confirming the package name and version from a trusted source.\n"
+        "- **The app does not open:** visit `http://127.0.0.1:8501` manually while the terminal process is running."
     )

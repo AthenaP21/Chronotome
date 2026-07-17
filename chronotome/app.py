@@ -20,9 +20,9 @@ from chronotome_ui.thematic_analysis import render_thematic_analysis
 
 
 WORKFLOW_PAGES = [
-    "Home", "Local installation", "Data ingestion", "Entity resolution", "Corpus & production",
+    "Home", "Data ingestion", "Entity resolution", "Corpus & production",
     "Geographic analysis", "Advanced analyses", "Thematic analysis",
-    "Institutional analysis", "Full workflow",
+    "Institutional analysis", "Full workflow", "Local installation",
 ]
 
 
@@ -57,8 +57,6 @@ def main() -> None:
 
     if page == "Home":
         render_home()
-    elif page == "Local installation":
-        render_local_installation()
     elif page == "Data ingestion":
         render_ingestion()
     elif page == "Entity resolution":
@@ -73,8 +71,10 @@ def main() -> None:
         render_thematic_analysis()
     elif page == "Institutional analysis":
         render_institutional_analysis()
-    else:
+    elif page == "Full workflow":
         render_full_workflow()
+    else:
+        render_local_installation()
 
     if should_scroll_top:
         with top_scroll_mount:
