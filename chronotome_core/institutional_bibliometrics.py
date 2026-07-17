@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+from .entity_resolution import canonicalize_country_name
+
 try:
     import seaborn as sns
 except ImportError:  # pragma: no cover - matplotlib fallback is exercised instead
@@ -31,7 +33,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 EU27_COUNTRIES = {
-    "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
+    "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia",
     "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary",
     "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta",
     "Netherlands", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia",
@@ -89,12 +91,6 @@ def prepare_institutional_dataset(data: pd.DataFrame) -> tuple[pd.DataFrame, lis
     frame = data.copy().reset_index(drop=True)
     warnings: list[str] = []
     if "Institutions_Extracted" not in frame.columns:
-        for fallback in ("Institutions_List", "Institutions_Standardized"):
-            if fallback in frame.columns:
-                frame["Institutions_Extracted"] = frame[fallback]
-                warnings.append(f"Used `{fallback}` as the institution-list column.")
-                break
-    if "Institutions_Extracted" not in frame.columns:
         raise ValueError(
             "The institutional handoff dataset must contain `Institutions_Extracted` "
             "(the geographic export retains this column)."
@@ -103,21 +99,29 @@ def prepare_institutional_dataset(data: pd.DataFrame) -> tuple[pd.DataFrame, lis
         lambda values: list(dict.fromkeys(filter(None, (_clean_institution(v) for v in ensure_list(values)))))
     )
 
-    country_column = "Countries_Extracted_List" if "Countries_Extracted_List" in frame else "Countries_Extracted"
-    if country_column not in frame.columns:
+    if "Countries_Extracted" not in frame.columns:
         frame["Countries_Extracted_List"] = [[] for _ in range(len(frame))]
         warnings.append("Country lists were unavailable; EU filtering will yield no records.")
     else:
-        frame["Countries_Extracted_List"] = frame[country_column].apply(ensure_list)
-    if "Countries_Extracted" not in frame.columns:
-        frame["Countries_Extracted"] = frame["Countries_Extracted_List"]
+        frame["Countries_Extracted_List"] = frame["Countries_Extracted"].apply(
+            lambda values: list(dict.fromkeys(
+                canonical for canonical in
+                (canonicalize_country_name(value) for value in ensure_list(values))
+                if canonical
+            ))
+        )
+    frame["Countries_Extracted"] = frame["Countries_Extracted_List"]
     frame["Country_Classification"] = frame["Countries_Extracted_List"].apply(_country_classification)
     frame["Publication_ID"] = np.arange(1, len(frame) + 1)
     return frame, warnings
 
 
 def is_exclusively_eu(countries: list) -> bool:
-    clean = [str(country).strip() for country in ensure_list(countries) if str(country).strip()]
+    clean = [
+        canonical for canonical in
+        (canonicalize_country_name(country) for country in ensure_list(countries))
+        if canonical
+    ]
     return bool(clean) and all(country in EU27_COUNTRIES for country in clean)
 
 

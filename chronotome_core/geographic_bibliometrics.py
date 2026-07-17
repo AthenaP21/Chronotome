@@ -23,6 +23,7 @@ except ImportError:
 from .descriptive_bibliometrics import (
     add_internal_mncs, configure_publication_style, normalize_doc_type,
 )
+from .entity_resolution import canonicalize_country_name
 
 try:
     from adjustText import adjust_text
@@ -32,19 +33,33 @@ except ImportError:
     ADJUST_TEXT_AVAILABLE = False
 
 
-def ensure_country_list(value) -> list:
-    """Return a safe list from list-valued or serialized country metadata."""
+def ensure_list(value) -> list:
+    """Return a stable list from a list-valued or serialized metadata cell."""
     if isinstance(value, str):
         try:
             parsed = ast.literal_eval(value)
         except (ValueError, SyntaxError):
             return []
-        return parsed if isinstance(parsed, list) else []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, (tuple, set)):
-        return list(value)
-    return []
+        values = parsed if isinstance(parsed, (list, tuple, set)) else []
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = []
+    if isinstance(values, set):
+        values = sorted(values, key=lambda item: str(item).casefold())
+    return list(values)
+
+
+def ensure_country_list(value) -> list:
+    """Return a stable list using the shared canonical country names."""
+    values = ensure_list(value)
+    if not values and isinstance(value, str) and value.strip():
+        values = [value]
+    canonical = (
+        canonicalize_country_name(country)
+        for country in values
+    )
+    return list(dict.fromkeys(country for country in canonical if country))
 
 
 def classify_country_collaboration(country_list) -> str:
@@ -109,28 +124,19 @@ def advanced_country_analysis(
     configure_advanced_country_style()
     warnings: list[str] = []
     frame = data.copy()
-    frame["Cited by"] = pd.to_numeric(frame.get("Cited by", 0), errors="coerce").fillna(0)
-
-    if "Publication Year" in frame.columns:
-        frame["Publication Year"] = pd.to_numeric(frame["Publication Year"], errors="coerce")
-        yearly = (
-            frame.groupby("Publication Year")["Cited by"].mean()
-            .reset_index(name="Global_Avg_Citations")
-        )
-        normalized = frame.merge(yearly, on="Publication Year", how="left")
-        normalized["Global_Avg_Citations"] = normalized["Global_Avg_Citations"].fillna(1).replace(0, 1)
-        normalized["Normalized_Citations"] = (
-            normalized["Cited by"] / normalized["Global_Avg_Citations"]
-        )
+    if "Cited by" not in frame:
+        frame["Cited by"] = np.nan
+    frame["Cited by"] = pd.to_numeric(frame["Cited by"], errors="coerce")
+    if "MNCS" not in frame or "MNCS_Defined" not in frame:
+        frame, yearly, mncs_warnings = add_internal_mncs(frame)
+        warnings.extend(mncs_warnings)
     else:
-        yearly = pd.DataFrame(columns=["Publication Year", "Global_Avg_Citations"])
-        normalized = frame.copy()
-        normalized["Normalized_Citations"] = pd.to_numeric(
-            normalized.get("MNCS", 1.0), errors="coerce"
-        ).fillna(0)
-        warnings.append(
-            "Publication Year is unavailable; the advanced analysis reused existing MNCS values."
-        )
+        frame["MNCS"] = pd.to_numeric(frame["MNCS"], errors="coerce")
+        yearly = pd.DataFrame(columns=[
+            "Publication Year", "Reference Set Size", "Average Citations (Baseline)",
+            "Median Citations", "Total Citations", "Zero-mean reference year",
+        ])
+    normalized = frame.copy()
 
     normalized["Countries_List"] = normalized["Countries_Extracted"].apply(ensure_country_list)
     normalized_exploded = normalized.explode("Countries_List").rename(columns={"Countries_List": "Country"})
@@ -140,7 +146,7 @@ def advanced_country_analysis(
 
     impact = (
         normalized_exploded.groupby("Country")
-        .agg(MNCS=("Normalized_Citations", "mean"), Total_Citations=("Cited by", "sum"))
+        .agg(MNCS=("MNCS", "mean"), Total_Citations=("Cited by", "sum"))
         .reset_index()
     )
     country_stats = collaboration.merge(impact, on="Country", how="left", suffixes=("", "_Advanced"))
@@ -149,7 +155,8 @@ def advanced_country_analysis(
         if advanced_column in country_stats.columns:
             country_stats[column] = country_stats[advanced_column]
             country_stats = country_stats.drop(columns=[advanced_column])
-    country_stats["MNCS"] = country_stats.get("MNCS", 0).fillna(0)
+    if "MNCS" not in country_stats:
+        country_stats["MNCS"] = np.nan
     country_stats["Total_Citations"] = country_stats.get("Total_Citations", 0).fillna(0).astype(int)
     country_stats["Total_Articles"] = country_stats["Articles"]
     total_countries = len(country_stats)
@@ -187,19 +194,27 @@ def advanced_country_analysis(
         figures["Country_Citation_Impact_Distribution"] = fig_a
 
     # Plot B: productivity-impact strategic matrix.
-    matrix_data = country_stats[country_stats["Total_Articles"] >= max(1, int(min_publications))].copy()
+    eligible_matrix_data = country_stats[
+        country_stats["Total_Articles"] >= max(1, int(min_publications))
+    ].copy()
+    matrix_data = eligible_matrix_data.dropna(subset=["MNCS"]).copy()
     tables["country_performance_matrix_data"] = matrix_data
     if matrix_data.empty:
-        warnings.append(
-            f"No country met the minimum of {int(min_publications)} articles; the performance matrix was skipped."
-        )
+        if eligible_matrix_data.empty:
+            warnings.append(
+                f"No country met the minimum of {int(min_publications)} articles; the performance matrix was skipped."
+            )
+        else:
+            warnings.append(
+                "MNCS is undefined for every eligible country; the performance matrix was skipped."
+            )
     else:
         fig_b, ax = plt.subplots(figsize=(12, 9))
         citations = matrix_data["Total_Citations"].fillna(0).clip(lower=0).astype(float)
         citation_sqrt = np.sqrt(citations + 1)
         maximum_sqrt = citation_sqrt.max()
         sizes = 40 + (citation_sqrt / maximum_sqrt) * (1400 - 40) if maximum_sqrt else np.full(len(citations), 40)
-        mncs = matrix_data["MNCS"].fillna(0).astype(float)
+        mncs = matrix_data["MNCS"].astype(float)
         vmin, vmax = np.nanpercentile(mncs, 2), np.nanpercentile(mncs, 98)
         if vmin == vmax:
             vmin, vmax = mncs.min(), mncs.max() + 1e-9
@@ -214,7 +229,7 @@ def advanced_country_analysis(
         median_productivity = matrix_data["Total_Articles"].median()
         ax.axvline(median_productivity, color="black", linestyle=":", linewidth=1.0, alpha=0.6)
         ax.set_xlabel("Total Publications (log scale)")
-        ax.set_ylabel("Mean Normalized Citation Score (MNCS)")
+        ax.set_ylabel("Corpus-internal year-normalized citation score (MNCS)")
         ax.set_title(
             "Scientometric Performance Matrix: Productivity vs. Impact\n"
             f"(Subset: $N={len(matrix_data)}$ Countries with $\\geq$ {int(min_publications)} Articles)",
@@ -231,7 +246,7 @@ def advanced_country_analysis(
         ax.text(0.98, 0.01, "High Productivity / Low Impact",
                 transform=ax.transAxes, ha="right", va="bottom", fontsize=8, fontweight="bold", alpha=0.85)
         colorbar = fig_b.colorbar(scatter, ax=ax, pad=0.02)
-        colorbar.set_label("MNCS (Cividis)", rotation=90)
+        colorbar.set_label("Corpus-internal MNCS (Cividis)", rotation=90)
         labels = pd.concat([
             matrix_data.nlargest(15, "Total_Articles"),
             matrix_data.nlargest(10, "MNCS"),
@@ -310,13 +325,20 @@ def advanced_country_analysis(
         degree_values = np.array([sub_degree[node] for node in subgraph.nodes()], dtype=float)
         node_sizes = 300 + (np.sqrt(degree_values) / np.sqrt(degree_values.max())) * (2600 - 300)
         mncs_values = np.array([mncs_map.get(node, np.nan) for node in subgraph.nodes()], dtype=float)
-        if np.all(np.isnan(mncs_values)):
-            mncs_values = np.zeros(len(subgraph.nodes()))
-        vmin, vmax = np.nanpercentile(mncs_values, 2), np.nanpercentile(mncs_values, 98)
-        if vmin == vmax:
-            vmin, vmax = np.nanmin(mncs_values), np.nanmax(mncs_values) + 1e-9
-        norm = plt.Normalize(vmin=vmin, vmax=vmax)
-        node_colors = plt.cm.cividis(norm(np.nan_to_num(mncs_values, nan=vmin)))
+        finite_mncs = mncs_values[np.isfinite(mncs_values)]
+        if finite_mncs.size:
+            vmin, vmax = np.nanpercentile(finite_mncs, 2), np.nanpercentile(finite_mncs, 98)
+            if vmin == vmax:
+                vmax = vmin + 1e-9
+            norm = plt.Normalize(vmin=vmin, vmax=vmax)
+            node_colors = [
+                plt.cm.cividis(norm(value)) if np.isfinite(value) else "#B8B8B8"
+                for value in mncs_values
+            ]
+        else:
+            norm = None
+            node_colors = ["#B8B8B8"] * len(mncs_values)
+            warnings.append("MNCS is undefined for all displayed network countries; nodes use neutral gray.")
         positions = nx.spring_layout(
             subgraph, weight="weight", k=1.2, iterations=max(1, int(layout_iterations)), seed=42
         )
@@ -347,10 +369,11 @@ def advanced_country_analysis(
                 _fallback_adjust_text(texts, ax)
         elif texts:
             _fallback_adjust_text(texts, ax)
-        color_scalar = plt.cm.ScalarMappable(cmap=plt.cm.cividis, norm=norm)
-        color_scalar.set_array([])
-        colorbar = fig_c.colorbar(color_scalar, ax=ax, shrink=0.75, pad=0.02)
-        colorbar.set_label("MNCS (Cividis)")
+        if norm is not None:
+            color_scalar = plt.cm.ScalarMappable(cmap=plt.cm.cividis, norm=norm)
+            color_scalar.set_array([])
+            colorbar = fig_c.colorbar(color_scalar, ax=ax, shrink=0.75, pad=0.02)
+            colorbar.set_label("Corpus-internal MNCS (Cividis)")
         reference_degrees = np.unique(np.round(np.nanpercentile(degree_values, [50, 75, 95])).astype(int))
         handles = []
         for reference in reference_degrees:
@@ -410,7 +433,7 @@ def geographic_distribution_analysis(
     configure_publication_style()
     warnings: list[str] = []
     enriched = data.copy()
-    if "MNCS" not in enriched.columns:
+    if "MNCS" not in enriched.columns or "MNCS_Defined" not in enriched.columns:
         enriched, baselines, mncs_warnings = add_internal_mncs(enriched)
         warnings.extend(mncs_warnings)
         warnings.append("MNCS was calculated from the uploaded corpus's publication-year citation averages.")
@@ -419,9 +442,9 @@ def geographic_distribution_analysis(
         baselines = pd.DataFrame(columns=["Publication Year", "Average Citations (Baseline)"])
 
     if "Cited by" not in enriched.columns:
-        enriched["Cited by"] = 0
-        warnings.append("Cited by is unavailable; total country citations were set to zero.")
-    enriched["Cited by"] = pd.to_numeric(enriched["Cited by"], errors="coerce").fillna(0)
+        enriched["Cited by"] = np.nan
+        warnings.append("Cited by is unavailable; country citation totals may be undefined.")
+    enriched["Cited by"] = pd.to_numeric(enriched["Cited by"], errors="coerce")
     enriched["Countries_Extracted_List"] = enriched["Countries_Extracted"].apply(ensure_country_list)
     enriched["Country_Classification"] = enriched["Countries_Extracted_List"].apply(
         classify_country_collaboration
@@ -482,14 +505,13 @@ def geographic_distribution_analysis(
         .rename(columns={"Country_Exploded": "Country"})
     )
     country_stats = collaboration.merge(impact, on="Country", how="left")
-    country_stats["MNCS"] = country_stats["MNCS"].fillna(0)
     country_stats["Total_Citations"] = country_stats["Total_Citations"].fillna(0)
 
     total_countries = len(collaboration)
     total_documents = len(collaboration_data)
     top_volume = collaboration.head(max(1, int(collaboration_top_n))).copy()
     significant = country_stats[country_stats["Articles"] >= max(1, int(min_papers))].copy()
-    top_impact = significant.sort_values("MNCS", ascending=False).head(max(1, int(impact_top_n))).copy()
+    top_impact = significant.dropna(subset=["MNCS"]).sort_values("MNCS", ascending=False).head(max(1, int(impact_top_n))).copy()
     if significant.empty:
         warnings.append(
             f"No country met the minimum of {int(min_papers)} articles; the country impact figure was skipped."
@@ -550,9 +572,9 @@ def geographic_distribution_analysis(
         colors = [plt.cm.cividis(norm(value)) for value in plot_b["MNCS"]]
         ax2.barh(plot_b["Country"], plot_b["MNCS"], color=colors)
         ax2.axvline(x=1.0, color="black", linestyle="--", linewidth=1.5)
-        ax2.text(1.05, -1, "Global Avg (1.0)", color="black", fontsize=10, fontweight="bold")
-        ax2.set_xlabel("Mean Normalized Citation Score (MNCS)")
-        ax2.set_title("Quality (Field-Normalized Impact)", fontweight="bold")
+        ax2.text(1.05, -1, "Same-year corpus baseline (1.0)", color="black", fontsize=10, fontweight="bold")
+        ax2.set_xlabel("Corpus-internal year-normalized citation score (MNCS)")
+        ax2.set_title("Quality (Year-Normalized Within Corpus)", fontweight="bold")
         ax2.grid(axis="x", linestyle="--", alpha=0.5)
         ax2.spines[["top", "right", "left"]].set_visible(False)
         ax2.tick_params(left=False)
@@ -781,8 +803,9 @@ def country_case_study_analysis(
     warnings: list[str] = []
     total_papers = len(country_papers)
 
-    if "Database" in country_papers.columns:
-        database = _frequency_table(country_papers["Database"], "Database", 100)
+    if "Databases" in country_papers.columns:
+        database_values = country_papers["Databases"].apply(ensure_list).explode()
+        database = _frequency_table(database_values, "Database", 100)
         database["Percentage"] = database["Count"] / max(1, total_papers) * 100
     else:
         database = pd.DataFrame(columns=["Database", "Count", "Percentage"])
@@ -815,7 +838,7 @@ def country_case_study_analysis(
         institutions = _frequency_table(country_affiliations["Institution_Extracted"], "Institution", 15)
         institution_basis = "Affiliation occurrences"
     elif "Institutions_Extracted" in country_papers.columns:
-        institution_values = country_papers["Institutions_Extracted"].apply(ensure_country_list).explode()
+        institution_values = country_papers["Institutions_Extracted"].apply(ensure_list).explode()
         institutions = _frequency_table(institution_values, "Institution", 15)
         institution_basis = "Article-level institution appearances"
         warnings.append(

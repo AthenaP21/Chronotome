@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import io
 import json
-import zipfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+import sys
 from typing import Iterable
 
 import pandas as pd
+
+from .io import INTERNAL_SOURCE_FILE_COLUMN
 
 
 MAX_RASTER_SIDE_PX = 7200
@@ -18,6 +20,7 @@ _RASTER_DPI_LIMIT = ContextVar("chronotome_raster_dpi_limit", default=None)
 _RASTER_SIDE_LIMIT = ContextVar("chronotome_raster_side_limit", default=MAX_RASTER_SIDE_PX)
 _LOGO_WATERMARK_ENABLED = ContextVar("chronotome_logo_watermark_enabled", default=True)
 _LIST_LIKE_TYPES = (list, dict, tuple, set)
+_DATABASE_EXPORT_ORDER = {"scopus": 0, "web of science": 1}
 
 
 @contextmanager
@@ -32,10 +35,12 @@ def logo_watermark_policy(enabled=True):
 
 def _logo_watermark_path() -> Path:
     root = Path(__file__).resolve().parents[1]
-    preferred = root / "assets" / "chronotome-logo.png"
-    if preferred.exists():
-        return preferred
-    return root / "chronotome-logo.png"
+    candidates = (
+        root / "assets" / "chronotome-logo.png",
+        root / "chronotome-logo.png",
+        Path(sys.prefix) / "share" / "chronotome" / "chronotome-logo.png",
+    )
+    return next((path for path in candidates if path.exists()), candidates[1])
 
 
 @contextmanager
@@ -70,19 +75,60 @@ def _exportable_frame(data: pd.DataFrame) -> pd.DataFrame:
     Shallow copying is safe here because converted columns are replaced rather
     than edited in place.
     """
-    export = data.copy(deep=False)
-    for column in data.columns:
-        series = data[column]
+    public_data = data.drop(columns=[INTERNAL_SOURCE_FILE_COLUMN], errors="ignore")
+    export = public_data.copy(deep=False)
+    for column in public_data.columns:
+        series = public_data[column]
         if series.dtype != "object":
             continue
         if not any(isinstance(value, _LIST_LIKE_TYPES) for value in series.array):
             continue
         export[column] = series.map(
             lambda value: json.dumps(
-                list(value) if isinstance(value, set) else value, ensure_ascii=False
+                _deterministic_json_value(value, column=column),
+                ensure_ascii=False,
+                sort_keys=True,
             ) if isinstance(value, _LIST_LIKE_TYPES) else value
         )
     return export
+
+
+def _deterministic_json_value(value, *, column: str | None = None):
+    """Convert containers to stable JSON-compatible values without mutating them."""
+    if isinstance(value, dict):
+        return {
+            str(key): _deterministic_json_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]).casefold())
+        }
+    if isinstance(value, set):
+        items = sorted(value, key=lambda item: str(item).casefold())
+        return [_deterministic_json_value(item) for item in items]
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        if column == "Databases":
+            seen = {}
+            for item in items:
+                text = str(item).strip()
+                if text:
+                    seen.setdefault(text.casefold(), text)
+            items = sorted(
+                seen.values(),
+                key=lambda item: (_DATABASE_EXPORT_ORDER.get(item.casefold(), 99), item.casefold()),
+            )
+        elif column == "Source Files":
+            seen = {}
+            for item in items:
+                text = str(item).strip()
+                if text:
+                    seen.setdefault(text.casefold(), text)
+            items = list(seen.values())
+        return [_deterministic_json_value(item) for item in items]
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
 
 
 def dataframe_csv(data: pd.DataFrame) -> bytes:
@@ -176,21 +222,3 @@ def figure_svg(figure) -> bytes:
     with _temporary_logo_watermark(figure):
         figure.savefig(buffer, format="svg", bbox_inches="tight")
     return buffer.getvalue()
-
-
-def create_exports(processed_data, tables, figures) -> dict[str, bytes]:
-    """Create individual files and a ZIP containing every generated output."""
-    files: dict[str, bytes] = {"cleaned_bibliometric_dataset.csv": dataframe_csv(processed_data)}
-    for name, table in tables.items():
-        if isinstance(table, pd.DataFrame) and not table.empty:
-            files[f"tables/{name}.csv"] = dataframe_csv(table)
-    for name, figure in figures.items():
-        files[f"figures/{name}.png"] = figure_png(figure)
-        files[f"figures/{name}.svg"] = figure_svg(figure)
-        files[f"figures/{name}.pdf"] = figure_pdf(figure)
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path, content in files.items():
-            archive.writestr(path, content)
-    files["chronotome_outputs.zip"] = buffer.getvalue()
-    return files

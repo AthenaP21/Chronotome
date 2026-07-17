@@ -8,7 +8,7 @@ from datetime import datetime
 
 import streamlit as st
 
-from chronotome_core import run_all_workflow
+from chronotome_core import DEFAULT_CONFIG, run_chronotome
 
 
 def _section(number: int, title: str, caption: str | None = None):
@@ -48,12 +48,11 @@ def _file_signature(files):
 def render_full_workflow():
     st.title("Full Chronotome Workflow")
     st.markdown(
-        "Run the complete modern workflow in the background—from data ingestion and entity resolution "
-        "through corpus, geographic, advanced, thematic, institutional, and community analyses."
+        "Run data ingestion, entity resolution, corpus, geographic, advanced, thematic, "
+        "institutional, and community analyses in one sequence."
     )
     st.info(
-        "This is the one-click route for users who want every result without visiting each page. "
-        "It packages the workflow outputs into one downloadable ZIP when the background run finishes."
+        "The completed tables, figures, network files, enriched dataset, and manifest are provided in one ZIP."
     )
 
     _section(1, "Choose the workflow input")
@@ -94,25 +93,32 @@ def render_full_workflow():
              "Topic counts are selected automatically; all six institutional modes and community plots are included.")
     fw_left, fw_mid, fw_right = st.columns(3)
     enable_time_filter = fw_left.checkbox(
-        "Exclude collection year and later", value=True, key="full-time-filter",
+        "Exclude collection year and later",
+        value=bool(DEFAULT_CONFIG["enable_time_filter"]), key="full-time-filter",
     )
     collection_year = fw_mid.number_input(
         "Collection / cutoff year", min_value=1900, max_value=datetime.now().year + 5,
-        value=datetime.now().year, disabled=not enable_time_filter, key="full-cutoff-year",
+        value=int(DEFAULT_CONFIG["collection_year"] or datetime.now().year),
+        disabled=not enable_time_filter, key="full-cutoff-year",
     )
-    top_n = fw_right.number_input("Ranking size", min_value=5, max_value=50, value=10, key="full-top-n")
+    top_n = fw_right.number_input(
+        "Ranking size", min_value=5, max_value=50,
+        value=int(DEFAULT_CONFIG["top_n"]), key="full-top-n",
+    )
     net_left, net_mid, net_right = st.columns(3)
     min_papers = net_left.number_input(
         "Minimum papers for impact rankings", min_value=1, max_value=100,
-        value=5, key="full-min-papers",
+        value=int(DEFAULT_CONFIG["min_source_papers"]), key="full-min-papers",
     )
     institutional_top_n = net_mid.number_input(
         "Institutions in standard network plots", min_value=5, max_value=100,
-        value=30, key="full-institutional-top-n",
+        value=int(DEFAULT_CONFIG["institutional_top_n_plot"]),
+        key="full-institutional-top-n",
     )
     max_institutions = net_right.number_input(
         "Mega-consortium exclusion threshold", min_value=2, max_value=500,
-        value=50, key="full-max-institutions",
+        value=int(DEFAULT_CONFIG["max_institutions_per_paper"]),
+        key="full-max-institutions",
     )
 
     config = {
@@ -123,8 +129,10 @@ def render_full_workflow():
         "institutional_top_n_plot": int(institutional_top_n),
         "max_institutions_per_paper": int(max_institutions),
         # Deliberately fixed: automatic topic selection, no search-string removal.
-        "topic_k_values": list(range(3, 11)), "run_topic_institutional": True,
-        "community_top_n_global": 50, "community_top_n_eu": 30,
+        "topic_k_values": DEFAULT_CONFIG["topic_k_values"],
+        "run_topic_institutional": DEFAULT_CONFIG["run_topic_institutional"],
+        "community_top_n_global": DEFAULT_CONFIG["community_top_n_global"],
+        "community_top_n_eu": DEFAULT_CONFIG["community_top_n_eu"],
     }
     if ingestion_result is not None:
         input_signature = (
@@ -160,7 +168,7 @@ def render_full_workflow():
                         message += f" — {detail}"
                     status.write(message)
 
-                result = run_all_workflow(
+                result = run_chronotome(
                     scopus_files=scopus_files, wos_files=wos_files, modes=modes,
                     config=config, ingestion_result=ingestion_result,
                     progress_callback=progress,

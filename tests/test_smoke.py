@@ -17,12 +17,11 @@ from chronotome_core import (
     run_final_topic_models, run_geographic_bibliometrics, run_ingestion,
     run_institutional_analysis, run_topic_institutional_analysis,
     run_institutional_community_visualization,
-    run_all_workflow,
     run_thematic_preprocessing, run_topic_model_evaluation,
 )
 from chronotome_core.entity_resolution import validate_institution_alias_json
 from chronotome_core.export import dataframe_csv, effective_png_dpi
-from chronotome_core.io import InputError, inspect_source_uploads
+from chronotome_core.io import INTERNAL_SOURCE_FILE_COLUMN, InputError, inspect_source_uploads
 from chronotome_core.preprocessing import (
     clean_scopus_authors, clean_wos_authors, remove_id_codes_from_full_names,
     scopus_cited_reference_count, wos_cited_reference_count,
@@ -118,19 +117,22 @@ class ChronotomeSmokeTest(unittest.TestCase):
             patch("chronotome_core.runner.run_institutional_analysis", side_effect=institutional_side_effect) as run_inst,
             patch("chronotome_core.runner.run_institutional_community_visualization", side_effect=community_side_effect) as run_comm,
         ):
-            result = run_all_workflow(
+            result = run_chronotome(
                 scopus_files=[object()], modes={"Scopus": "single", "WoS": "single"},
                 config={"run_topic_institutional": False},
             )
 
         self.assertEqual(run_inst.call_count, 6)
         self.assertEqual(run_comm.call_count, 6)
+        self.assertEqual(
+            set(result),
+            {"processed_data", "stages", "manifest", "warnings", "exports", "metadata", "config"},
+        )
         community_stages = {
             key for key in result["stages"] if key.startswith(("31_", "32_", "33_", "34_", "35_", "36_"))
         }
         self.assertEqual(len(community_stages), 6)
-        self.assertNotIn("geographic", result)
-        self.assertNotIn("thematic_final", result)
+        self.assertIs(result["processed_data"], ordinary["data"])
         self.assertIn("final_rss_mb", result["metadata"])
         archive = zipfile.ZipFile(io.BytesIO(result["exports"]["chronotome_complete_background_workflow.zip"]))
         names = archive.namelist()
@@ -484,6 +486,10 @@ class ChronotomeSmokeTest(unittest.TestCase):
         self.assertEqual(len(result["processed_data"]), 6)
         self.assertIn("merged_bibliometric_dataset.xlsx", result["exports"])
         self.assertIn("stitched_scopus_export.csv", result["exports"])
+        stitched = pd.read_csv(io.BytesIO(result["exports"]["stitched_scopus_export.csv"]))
+        self.assertNotIn(INTERNAL_SOURCE_FILE_COLUMN, stitched.columns)
+        self.assertNotIn("combined", result["verifications"]["Scopus"])
+        self.assertNotIn("loaded", result["verifications"]["Scopus"])
         self.assertIn("preprocessing_source_audit.csv", result["exports"])
         self.assertIn("prisma_text_report.txt", result["exports"])
         self.assertNotIn("prisma_flow.png", result["exports"])
@@ -523,15 +529,18 @@ class ChronotomeSmokeTest(unittest.TestCase):
             "Addresses": "Lab, University of Example 2, Berlin, Germany; Center, CNRS, Paris, France",
             "CR": "Ref A; Ref B",
         }])
-        result = run_chronotome(
-            [Upload(scopus, "scopus.csv"), Upload(wos, "wos.csv")],
-            {"enable_time_filter": False, "run_thematic": True, "topic_count": 4},
+        ingestion = run_ingestion(
+            scopus_files=[Upload(scopus, "scopus.csv")],
+            wos_files=[Upload(wos, "wos.csv")],
+            modes={"Scopus": "single", "WoS": "single"},
+            config={"enable_time_filter": False},
         )
-        self.assertEqual(len(result["processed_data"]), 18)
-        self.assertGreater(len(result["tables"]), 30)
-        self.assertGreater(len(result["figures"]), 5)
-        self.assertIn("topics", result["tables"])
-        self.assertTrue(result["exports"]["chronotome_outputs.zip"])
+        self.assertEqual(len(ingestion["processed_data"]), 18)
+        self.assertIn("Primary Database", ingestion["processed_data"])
+        self.assertIn("Databases", ingestion["processed_data"])
+        self.assertIn("Source Files", ingestion["processed_data"])
+        self.assertNotIn("Database", ingestion["processed_data"])
+        self.assertTrue(ingestion["exports"]["chronotome_ingestion_outputs.zip"])
 
 
 if __name__ == "__main__":

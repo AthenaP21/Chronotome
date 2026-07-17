@@ -12,6 +12,7 @@ from chronotome_core import (
     run_institutional_analysis, run_institutional_community_visualization,
     run_topic_institutional_analysis,
 )
+from chronotome_core.runner import DEFAULT_CONFIG
 from chronotome_ui.figure_controls import render_customizable_figure
 from chronotome_ui.figure_preview import render_svg
 
@@ -60,7 +61,7 @@ def _select_dataset():
     upload = st.file_uploader(
         "Upload `article_summary_with_country_classification.csv` or `.xlsx`",
         type=["csv", "xlsx", "xls"], key="institutional-handoff-upload",
-        help="Use the file exported by Geographic Analysis; the basename is intentionally unchanged.",
+        help="Use the file exported by Geographic Analysis with its original filename.",
     )
     if upload is None:
         return None, None
@@ -229,11 +230,13 @@ def render_institutional_analysis():
         )
     setting_left, setting_right = st.columns(2)
     top_n_plot = setting_left.number_input(
-        "Institutions shown in network", min_value=5, max_value=100, value=30,
+        "Institutions shown in network", min_value=5, max_value=100,
+        value=int(DEFAULT_CONFIG["institutional_top_n_plot"]),
         help="Top institutions by publication volume.", key="institutional-top-n-plot",
     )
     max_institutions = setting_right.number_input(
-        "Mega-consortium exclusion threshold", min_value=2, max_value=500, value=50,
+        "Mega-consortium exclusion threshold", min_value=2, max_value=500,
+        value=int(DEFAULT_CONFIG["max_institutions_per_paper"]),
         help="Papers above this institution count are excluded only from edge construction.",
         key="institutional-max-institutions",
     )
@@ -312,7 +315,7 @@ def render_institutional_analysis():
              "Color = community; node size = full-network collaboration strength; dark edges = within-community ties.")
     community_cache = st.session_state.setdefault("institutional-community-cache", {})
     cached_community = community_cache.get(analysis_name)
-    st.caption("This runs deterministic weighted Louvain community detection for the selected network.")
+    st.caption("This runs weighted Louvain community detection for the selected network.")
     button_label = "Regenerate communities :D" if cached_community else "Generate communities :D"
     if metadata["network_edges"] == 0:
         st.caption("Community detection requires at least one collaboration edge.")

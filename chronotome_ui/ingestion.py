@@ -10,6 +10,7 @@ import streamlit as st
 from chronotome_core import run_ingestion
 from chronotome_core.export import dataframe_csv
 from chronotome_core.io import InputError, inspect_source_uploads
+from chronotome_core.runner import DEFAULT_CONFIG
 from chronotome_ui.navigation import navigate_to_page
 from chronotome_ui.state import clear_downstream_state
 
@@ -76,30 +77,41 @@ def _show_verification(source: str, verification: dict):
     if summary["Mode"] == "Appendage":
         st.download_button(
             f"Download verified stitched {source} CSV",
-            dataframe_csv(verification["combined"]),
+            verification["stitched_csv"],
             f"stitched_{source.lower().replace(' ', '_')}_export.csv",
             "text/csv", key=f"verified-stitched-{source}",
         )
+
+
+def _compact_verification(verification: dict) -> dict:
+    """Retain display metadata and one portable stitched export, not raw frames."""
+    compact = {
+        "files": verification["files"],
+        "summary": dict(verification["summary"]),
+        "warnings": list(verification["warnings"]),
+    }
+    if compact["summary"]["Mode"] == "Appendage":
+        compact["stitched_csv"] = dataframe_csv(verification["combined"])
+    return compact
 
 
 def render_ingestion():
     """Render configuration, verification, harmonization, PRISMA, and exports."""
     st.title("Data Ingestion, Preprocessing and Harmonization")
     st.markdown(
-        "This phase ingests **Scopus** and/or **Web of Science (WoS)** exports, "
+        "Load **Scopus** and/or **Web of Science (WoS)** exports, "
         "stitches split exports when requested, harmonizes their metadata, and deduplicates "
         "the merged corpus."
     )
     st.info(
-        "Chronotome uses fault-tolerant format detection, comma/tab fallbacks, Excel parsing, "
-        "and the WoS `.xls` tab-text fallback. Verification happens before "
-        "any records are merged."
+        "Chronotome checks file content, delimiters, Excel formats, and Web of Science tab-delimited "
+        "files before records are merged."
     )
 
     with st.expander("How Single file and Appendage modes work", expanded=False):
         st.markdown(
             """
-**Single file** is the usual choice when you have one complete export for a source.
+**Single file** is for one complete export from a source.
 
 **Appendage** is for one export split by a database limit. Chronotome only stacks files that:
 
@@ -140,9 +152,11 @@ Appendage does not merge Scopus with WoS and does not silently combine different
             with st.spinner("Reading files and checking ingestion signals…"):
                 verification = {}
                 if scopus_files:
-                    verification["Scopus"] = inspect_source_uploads(scopus_files, "Scopus", scopus_mode)
+                    details = inspect_source_uploads(scopus_files, "Scopus", scopus_mode)
+                    verification["Scopus"] = _compact_verification(details)
                 if wos_files:
-                    verification["WoS"] = inspect_source_uploads(wos_files, "WoS", wos_mode)
+                    details = inspect_source_uploads(wos_files, "WoS", wos_mode)
+                    verification["WoS"] = _compact_verification(details)
             st.session_state["ingestion_verification"] = verification
             st.session_state["ingestion_signature"] = current_signature
             st.session_state.pop("ingestion_results", None)
@@ -173,9 +187,9 @@ Appendage does not merge Scopus with WoS and does not silently combine different
 - **Scopus authors:** split on semicolons, trim whitespace, and join with `; `.
 - **WoS authors:** prefer semicolons; use commas only when no semicolon is present; join with `; `.
 - **Scopus internal IDs:** remove numeric parenthetical codes such as `(57211158827)` from full names.
-- **Cited references:** count non-empty semicolon-delimited entries from Scopus `References` or WoS `CR`.
+- **Cited references:** retain the original Scopus `References` or WoS `CR` text as `Cited References Raw`; when no valid exported count exists, count its non-empty semicolon-delimited entries separately.
 
-These heuristics are intentionally fixed so author counts, collaboration networks, and later indicators are reproducible.
+These rules are applied consistently to author counts, collaboration networks, and later indicators.
             """
         )
     with schema_tab:
@@ -183,7 +197,7 @@ These heuristics are intentionally fixed so author counts, collaboration network
             """
 #### Explicit schema mapping
 
-Chronotome uses auditable Scopus → unified and WoS → unified dictionaries. Only fields in the ordered unified schema are retained. Every final row receives a `Database` provenance value.
+Chronotome uses auditable Scopus → unified and WoS → unified dictionaries. Each final row records the selected primary source in `Primary Database`, every contributing database in the `Databases` list, and every contributing input filename in the `Source Files` list.
 
 The result audit will show every source field, its unified name, whether it was present, its populated-row count, and whether it is retained in the final schema.
             """
@@ -193,10 +207,10 @@ The result audit will show every source field, its unified name, whether it was 
             """
 #### Prioritized data fusion
 
-1. Sort by `Cited by` descending.
-2. Normalize DOI by lowercasing and trimming whitespace.
-3. Fuse each DOI group using the first non-null value per field.
-4. For records without DOI only, deduplicate on normalized title plus publication year.
+1. Sort duplicate candidates by `Cited by` descending, with original row order as the stable tie-breaker.
+2. Normalize DOI labels and resolver URLs, Unicode, case, whitespace, and conservative trailing citation punctuation.
+3. Keep the most-cited row as the primary record and fill only its missing metadata from other rows in that DOI group.
+4. For records without a usable DOI, deduplicate only when both a usable normalized title and publication year are present. Incomplete title-year records remain separate.
 
 The result audit reports both removed records and missing metadata cells recovered from secondary DOI records.
             """
@@ -212,7 +226,8 @@ When enabled, Chronotome keeps only records where `Publication Year < cutoff yea
     st.markdown("### Ingestion settings")
     set_left, set_mid, set_right = st.columns(3)
     enable_time_filter = set_left.checkbox(
-        "Exclude collection year and later", value=True, key="ingestion_time_filter",
+        "Exclude collection year and later", value=bool(DEFAULT_CONFIG["enable_time_filter"]),
+        key="ingestion_time_filter",
         help="Use this to avoid incomplete indexing for the current collection year.",
     )
     cutoff_source = set_mid.radio(
@@ -232,7 +247,8 @@ When enabled, Chronotome keeps only records where `Publication Year < cutoff yea
     st.write(
         "The harmonization step maps both database schemas to Chronotome's common columns, "
         "keeps the most-cited DOI record as the fusion base, fills its missing metadata from "
-        "duplicates, and checks records without DOI by normalized title plus year."
+        "duplicates, aggregates database and source-file provenance, and checks no-DOI records "
+        "only when both normalized title and publication year are available."
     )
     if st.button("Harmonize and deduplicate", type="primary", disabled=not verified_current):
         try:

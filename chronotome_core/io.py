@@ -5,17 +5,52 @@ from __future__ import annotations
 import io
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterable
 
+import numpy as np
 import pandas as pd
 
 SUPPORTED_EXTENSIONS = {".csv", ".txt", ".xls", ".xlsx"}
+INTERNAL_SOURCE_FILE_COLUMN = "__chronotome_source_file__"
+_DOI_PREFIX_PATTERN = re.compile(
+    r"^(?:doi\s*:\s*|https?://(?:dx\.)?doi\.org/)",
+    flags=re.IGNORECASE,
+)
+_MISSING_DOI_TOKENS = {"", "na", "n/a", "nan", "none", "null", "<na>"}
+_WOS_MULTIVALUE_TAGS = {"AU", "AF", "C1", "CR", "DE", "ID"}
+_CITED_REFERENCE_RAW_COLUMNS = {
+    "References",
+    "CR",
+    "Cited References",
+    "Cited References Raw",
+}
+_MISSING_REFERENCE_TOKENS = _MISSING_DOI_TOKENS - {""}
 
 
 class InputError(ValueError):
     """Raised when an uploaded bibliometric export cannot be used."""
+
+
+def normalize_doi(value: object) -> str | pd.NA:
+    """Return the canonical permissive DOI representation used by all stages."""
+    if value is None:
+        return pd.NA
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and missing:
+        return pd.NA
+    text = unicodedata.normalize("NFKC", str(value)).strip()
+    if text.casefold() in _MISSING_DOI_TOKENS:
+        return pd.NA
+    text = _DOI_PREFIX_PATTERN.sub("", text).strip()
+    text = re.sub(r"\s+", "", text)
+    text = text.rstrip(".,;").casefold()
+    return text if text else pd.NA
 
 
 @dataclass
@@ -29,6 +64,18 @@ class LoadedFile:
     extension: str = ""
     part_number: int | None = None
     series_name: str | None = None
+
+
+def _attach_source_filename(frame: pd.DataFrame, filename: str) -> pd.DataFrame:
+    """Attach a basename-only ingestion marker without accepting column collisions."""
+    if INTERNAL_SOURCE_FILE_COLUMN in frame.columns:
+        raise InputError(
+            f"The upload contains Chronotome's reserved internal column "
+            f"'{INTERNAL_SOURCE_FILE_COLUMN}'. Rename that source column and upload it again."
+        )
+    annotated = frame.copy()
+    annotated[INTERNAL_SOURCE_FILE_COLUMN] = Path(str(filename).replace("\\", "/")).name
+    return annotated
 
 
 SCHEMA_FIELDS = {
@@ -52,8 +99,14 @@ SCHEMA_FIELDS = {
 }
 
 
+def _filename_basename(value: object) -> str:
+    """Return a portable filename without exposing a client-side path."""
+    basename = Path(str(value).replace("\\", "/")).name.strip()
+    return basename or "upload.csv"
+
+
 def _bytes(uploaded_file) -> tuple[str, bytes]:
-    name = getattr(uploaded_file, "name", "upload.csv")
+    name = _filename_basename(getattr(uploaded_file, "name", "upload.csv"))
     if isinstance(uploaded_file, (bytes, bytearray)):
         return name, bytes(uploaded_file)
     if hasattr(uploaded_file, "getvalue"):
@@ -80,12 +133,93 @@ def parse_wos_plaintext(content: bytes) -> pd.DataFrame:
             current, current_tag = {}, None
         elif re.match(r"^[A-Z][A-Z0-9] ", line):
             current_tag = line[:2]
-            current[current_tag] = line[3:]
+            value = line[3:].strip()
+            if current_tag in current and value:
+                separator = "; " if current_tag in _WOS_MULTIVALUE_TAGS else " "
+                current[current_tag] += separator + value
+            else:
+                current[current_tag] = value
         elif line.startswith("   ") and current_tag:
-            current[current_tag] += " " + line.strip()
+            value = line.strip()
+            if value:
+                separator = "; " if current_tag in _WOS_MULTIVALUE_TAGS else " "
+                current[current_tag] += separator + value
     if current:
         records.append(current)
     return pd.DataFrame(records)
+
+
+def _reference_upload_value(value: object) -> object:
+    """Preserve a present blank reference cell while retaining missing tokens."""
+    if value is None:
+        return pd.NA
+    text = str(value)
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    if stripped.casefold() in _MISSING_REFERENCE_TOKENS:
+        return pd.NA
+    return text
+
+
+def _overlay_uploaded_reference_columns(
+    frame: pd.DataFrame,
+    preserved: pd.DataFrame,
+    reference_columns: list[object],
+) -> pd.DataFrame:
+    """Overlay reference fields reread without changing other NA parsing."""
+    if len(preserved) != len(frame):
+        raise InputError("Could not preserve cited-reference cells while reading the upload.")
+    for column in reference_columns:
+        frame[column] = pd.Series(
+            preserved[column].to_numpy(dtype=object, copy=False),
+            index=frame.index,
+            dtype="object",
+        )
+    return frame
+
+
+def _read_csv_preserving_empty_references(bio: io.BytesIO, **kwargs) -> pd.DataFrame:
+    """Read delimited data while distinguishing blank raw references from missing."""
+    bio.seek(0)
+    frame = pd.read_csv(bio, **kwargs)
+    reference_columns = [
+        column
+        for column in frame.columns
+        if str(column).strip() in _CITED_REFERENCE_RAW_COLUMNS
+    ]
+    if not reference_columns:
+        return frame
+    bio.seek(0)
+    preserved = pd.read_csv(
+        bio,
+        **kwargs,
+        usecols=reference_columns,
+        keep_default_na=False,
+        converters={column: _reference_upload_value for column in reference_columns},
+    )
+    return _overlay_uploaded_reference_columns(frame, preserved, reference_columns)
+
+
+def _read_excel_preserving_empty_references(bio: io.BytesIO) -> pd.DataFrame:
+    """Read a workbook while distinguishing blank raw references from missing."""
+    bio.seek(0)
+    frame = pd.read_excel(bio)
+    reference_columns = [
+        column
+        for column in frame.columns
+        if str(column).strip() in _CITED_REFERENCE_RAW_COLUMNS
+    ]
+    if not reference_columns:
+        return frame
+    bio.seek(0)
+    preserved = pd.read_excel(
+        bio,
+        usecols=reference_columns,
+        keep_default_na=False,
+        converters={column: _reference_upload_value for column in reference_columns},
+    )
+    return _overlay_uploaded_reference_columns(frame, preserved, reference_columns)
 
 
 def read_uploaded_file_detailed(uploaded_file) -> tuple[pd.DataFrame, str]:
@@ -100,19 +234,23 @@ def read_uploaded_file_detailed(uploaded_file) -> tuple[pd.DataFrame, str]:
     errors: list[str] = []
     if suffix in {".xls", ".xlsx"}:
         try:
-            return pd.read_excel(bio), "Excel workbook"
+            return _read_excel_preserving_empty_references(bio), "Excel workbook"
         except Exception as exc:
             errors.append(f"Excel reader: {exc}")
             bio.seek(0)
             try:
-                return pd.read_csv(bio, sep="\t", on_bad_lines="skip", quoting=3), "Tab-delimited fallback"
+                return _read_csv_preserving_empty_references(
+                    bio, sep="\t", on_bad_lines="skip", quoting=3
+                ), "Tab-delimited fallback"
             except Exception as exc2:
                 errors.append(f"tab fallback: {exc2}")
     elif suffix == ".csv":
         for sep in (",", "\t"):
             bio.seek(0)
             try:
-                frame = pd.read_csv(bio, sep=sep, on_bad_lines="skip", low_memory=False)
+                frame = _read_csv_preserving_empty_references(
+                    bio, sep=sep, on_bad_lines="skip", low_memory=False
+                )
                 if frame.shape[1] > 1:
                     strategy = "Comma-delimited CSV" if sep == "," else "Tab-delimited CSV fallback"
                     return frame, strategy
@@ -120,7 +258,9 @@ def read_uploaded_file_detailed(uploaded_file) -> tuple[pd.DataFrame, str]:
                 errors.append(f"CSV separator {sep!r}: {exc}")
     else:
         try:
-            frame = pd.read_csv(bio, sep="\t", on_bad_lines="skip", quoting=3, low_memory=False)
+            frame = _read_csv_preserving_empty_references(
+                bio, sep="\t", on_bad_lines="skip", quoting=3, low_memory=False
+            )
             if frame.shape[1] > 1:
                 return frame, "Tab-delimited text"
         except Exception as exc:
@@ -161,7 +301,8 @@ def load_uploads(uploaded_files) -> list[LoadedFile]:
         if frame.empty:
             raise InputError(f"'{getattr(item, 'name', 'upload')}' contains no records.")
         frame.columns = [str(c).strip() for c in frame.columns]
-        name = getattr(item, "name", "upload")
+        name = _filename_basename(getattr(item, "name", "upload"))
+        frame = _attach_source_filename(frame, name)
         loaded.append(LoadedFile(name, detect_source(frame.columns), frame, strategy, Path(name).suffix.lower()))
     return loaded
 
@@ -256,10 +397,11 @@ def inspect_source_uploads(uploaded_files, source: str, mode: str = "single") ->
                 f"(missing: {missing or 'none'}; additional: {added or 'none'})."
             )
         first_columns = columns if first_columns is None else first_columns
+        frame = _attach_source_filename(frame, name)
         loaded.append(LoadedFile(name, source, frame, strategy, extension, part or None, series))
         file_rows.append({
             "File": name, "Part": part if mode == "appendage" else "—", "Extension": extension,
-            "Parser": strategy, "Detected source": detected, "Rows": len(frame), "Columns": len(frame.columns),
+            "Parser": strategy, "Detected source": detected, "Rows": len(frame), "Columns": len(columns),
             "Required title": "Present", "Recommended fields": f"{present}/{expected}",
             "Schema coverage": f"{coverage:.0f}%", "Matches first schema": "Yes" if columns_match else "No",
             "Status": "Ready" if columns_match else "Ready with warning",
@@ -278,12 +420,13 @@ def inspect_source_uploads(uploaded_files, source: str, mode: str = "single") ->
     year_column = "Year" if source == "Scopus" else ("Publication Year" if "Publication Year" in combined else "PY")
     years = pd.to_numeric(combined.get(year_column, pd.Series(dtype=float)), errors="coerce").dropna()
     doi_column = "DOI" if "DOI" in combined else ("DI" if "DI" in combined else None)
-    dois = combined[doi_column].astype("string").str.strip() if doi_column else pd.Series(dtype="string")
+    dois = combined[doi_column].map(normalize_doi).astype("string") if doi_column else pd.Series(dtype="string")
     title_column = "Title" if source == "Scopus" else ("Article Title" if "Article Title" in combined else "TI")
     affiliation_column = "Affiliations" if source == "Scopus" else ("Addresses" if "Addresses" in combined else "C1")
     summary = {
         "Source": source, "Mode": "Appendage" if mode == "appendage" else "Single file",
-        "Files": len(loaded), "Records": len(combined), "Columns (union)": len(combined.columns),
+        "Files": len(loaded), "Records": len(combined),
+        "Columns (union)": len([column for column in combined.columns if column != INTERNAL_SOURCE_FILE_COLUMN]),
         "Year range": f"{int(years.min())}–{int(years.max())}" if not years.empty else "Not detected",
         "Titles present": int(combined[title_column].notna().sum()) if title_column in combined else 0,
         "DOI coverage": f"{dois.notna().mean() * 100:.1f}%" if doi_column else "Not available",
@@ -311,7 +454,10 @@ def inspect_uploads(uploaded_files) -> dict:
     loaded = load_uploads(uploaded_files)
     sources = combine_by_source(loaded)
     records = sum(len(frame) for frame in sources.values())
-    columns = sorted({col for frame in sources.values() for col in frame.columns})
+    columns = sorted({
+        col for frame in sources.values() for col in frame.columns
+        if col != INTERNAL_SOURCE_FILE_COLUMN
+    })
     year_values = []
     for source, frame in sources.items():
         year_col = "Year" if source == "Scopus" else "Publication Year"

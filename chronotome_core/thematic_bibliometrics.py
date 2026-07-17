@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from collections import Counter
 
@@ -12,6 +13,10 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import LatentDirichletAllocation, NMF
 from sklearn.feature_extraction.text import CountVectorizer
+
+from .descriptive_bibliometrics import add_internal_mncs
+from .entity_resolution import canonicalize_country_name
+from .preprocessing import select_author_text
 
 
 DEFAULT_NOISE_LISTS = {
@@ -81,16 +86,11 @@ def prepare_thematic_dataset(data: pd.DataFrame) -> tuple[pd.DataFrame, list[str
             warnings.extend(resolved.get("warnings", []))
     work["Countries_Extracted"] = work["Countries_Extracted"].map(_country_list)
     if "Cited by" not in work:
-        work["Cited by"] = 0
-    work["Cited by"] = pd.to_numeric(work["Cited by"], errors="coerce").fillna(0)
-    if "MNCS" not in work:
-        if "Publication Year" in work:
-            years = pd.to_numeric(work["Publication Year"], errors="coerce")
-            baselines = work.assign(_year=years).groupby("_year")["Cited by"].transform("mean").replace(0, 1)
-            work["MNCS"] = (work["Cited by"] / baselines).replace([np.inf, -np.inf], np.nan).fillna(0)
-        else:
-            work["MNCS"] = 1.0
-            warnings.append("Publication Year was unavailable; MNCS used the safe fallback 1.0.")
+        work["Cited by"] = np.nan
+    work["Cited by"] = pd.to_numeric(work["Cited by"], errors="coerce")
+    if "MNCS" not in work or "MNCS_Defined" not in work:
+        work, _, mncs_warnings = add_internal_mncs(work)
+        warnings.extend(mncs_warnings)
     work["Country_Classification"] = work["Countries_Extracted"].map(
         lambda values: "MCP" if len(set(values)) > 1 else ("SCP" if len(set(values)) == 1 else "Unknown")
     )
@@ -433,11 +433,19 @@ def final_topic_models(data: pd.DataFrame, lda_k: int, nmf_k: int, bin_duration:
 
 def _country_list(value):
     if isinstance(value, (list, tuple, set)):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        cleaned = value.strip().strip("[]")
-        return [item.strip().strip("'\"") for item in cleaned.split(",") if item.strip().strip("'\"")]
-    return []
+        values = value
+    elif isinstance(value, str):
+        try:
+            parsed = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            parsed = [value]
+        values = parsed if isinstance(parsed, (list, tuple, set)) else [parsed]
+    else:
+        values = []
+    if isinstance(values, set):
+        values = sorted(values, key=lambda item: str(item).casefold())
+    canonical = (canonicalize_country_name(item) for item in values)
+    return list(dict.fromkeys(country for country in canonical if country))
 
 
 def advanced_thematic_analysis(data: pd.DataFrame, cooccurrence_threshold: float = 0.1,
@@ -446,7 +454,9 @@ def advanced_thematic_analysis(data: pd.DataFrame, cooccurrence_threshold: float
     if "Dominant_Topic" not in data or "Topic_Distribution" not in data:
         raise ValueError("Final LDA topic assignments and distributions are required.")
     work = data.reset_index(drop=True).copy()
-    work["Cited by"] = pd.to_numeric(work.get("Cited by", 0), errors="coerce").fillna(0)
+    if "Cited by" not in work:
+        work["Cited by"] = np.nan
+    work["Cited by"] = pd.to_numeric(work["Cited by"], errors="coerce")
     work["Publication Year"] = pd.to_numeric(work.get("Publication Year"), errors="coerce")
     distributions = np.vstack([
         np.asarray(value, dtype=float) for value in work["Topic_Distribution"]
@@ -454,28 +464,35 @@ def advanced_thematic_analysis(data: pd.DataFrame, cooccurrence_threshold: float
     n_topics = distributions.shape[1]
     warnings, tables, figures = [], {}, {}
 
-    yearly = work.groupby("Publication Year")["Cited by"].transform("mean").replace(0, np.nan)
-    work["Normalized_Citations"] = (work["Cited by"] / yearly).replace([np.inf, -np.inf], np.nan).fillna(0)
+    if "MNCS" not in work or "MNCS_Defined" not in work:
+        work, _, mncs_warnings = add_internal_mncs(work)
+        warnings.extend(mncs_warnings)
     impact = work.groupby("Dominant_Topic").agg(
-        Topic_MNCS=("Normalized_Citations", "mean"),
+        Topic_MNCS=("MNCS", "mean"),
         Number_of_Documents=("Dominant_Topic", "size"),
     ).reset_index().sort_values("Topic_MNCS", ascending=False)
     impact["Topic_Label"] = "Topic " + impact["Dominant_Topic"].astype(int).astype(str)
     tables["topic_citation_impact_mncs"] = impact
-    plot = impact.sort_values("Topic_MNCS")
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bars = ax.barh(plot["Topic_Label"], plot["Topic_MNCS"], color="#00204d")
-    ax.axvline(1.0, color="#b9ac70", linestyle="--", linewidth=2, label="Global Baseline (1.0)")
-    ax.set_title(f"Relative Citation Impact of Research Topics (MNCS)\n(N={len(impact)} topics, N={len(work)} articles)",
-                 fontsize=14, fontweight="bold", pad=20)
-    ax.set_xlabel("Mean Normalized Citation Score (MNCS)", fontsize=12); ax.set_ylabel(None)
-    ax.spines[["top", "right", "left"]].set_visible(False); ax.grid(axis="x", linestyle="--", alpha=0.6)
-    ax.legend(loc="lower right"); maximum = plot["Topic_MNCS"].max() if not plot.empty else 1
-    ax.set_xlim(0, max(1.1, maximum * 1.15))
-    for bar in bars:
-        ax.annotate(f" {bar.get_width():.2f}", xy=(bar.get_width(), bar.get_y()+bar.get_height()/2),
-                    xytext=(3, 0), textcoords="offset points", ha="left", va="center", fontsize=10)
-    fig.tight_layout(); figures["topic_citation_impact_mncs"] = fig
+    plot = impact.dropna(subset=["Topic_MNCS"]).sort_values("Topic_MNCS")
+    if plot.empty:
+        warnings.append("Topic impact could not be plotted because MNCS is undefined for all topics.")
+    else:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bars = ax.barh(plot["Topic_Label"], plot["Topic_MNCS"], color="#00204d")
+        ax.axvline(
+            1.0, color="#b9ac70", linestyle="--", linewidth=2,
+            label="Same-year corpus baseline (1.0)",
+        )
+        ax.set_title(f"Relative Citation Impact of Research Topics (MNCS)\n(N={len(impact)} topics, N={len(work)} articles)",
+                     fontsize=14, fontweight="bold", pad=20)
+        ax.set_xlabel("Corpus-internal year-normalized citation score (MNCS)", fontsize=12); ax.set_ylabel(None)
+        ax.spines[["top", "right", "left"]].set_visible(False); ax.grid(axis="x", linestyle="--", alpha=0.6)
+        ax.legend(loc="lower right"); maximum = plot["Topic_MNCS"].max()
+        ax.set_xlim(0, max(1.1, maximum * 1.15))
+        for bar in bars:
+            ax.annotate(f" {bar.get_width():.2f}", xy=(bar.get_width(), bar.get_y()+bar.get_height()/2),
+                        xytext=(3, 0), textcoords="offset points", ha="left", va="center", fontsize=10)
+        fig.tight_layout(); figures["topic_citation_impact_mncs"] = fig
 
     binary = (distributions > float(cooccurrence_threshold)).astype(int)
     cooccurrence = binary.T @ binary; np.fill_diagonal(cooccurrence, 0)
@@ -492,8 +509,10 @@ def advanced_thematic_analysis(data: pd.DataFrame, cooccurrence_threshold: float
     ax.tick_params(axis="x", rotation=0); ax.tick_params(axis="y", rotation=0)
     fig.tight_layout(); figures["topic_cooccurrence_heatmap"] = fig
 
+    work["Selected Author Names"] = select_author_text(work)
     article_columns = [column for column in (
-        "Dominant_Topic", "Title", "Authors", "Publication Year", "OriginalTitle", "Source Title", "Cited by", "DOI"
+        "Dominant_Topic", "Title", "Authors", "Author Full Names", "Selected Author Names",
+        "Publication Year", "OriginalTitle", "Source Title", "Cited by", "DOI"
     ) if column in work]
     articles = work[article_columns].copy().sort_values("Cited by", ascending=False)
     if "OriginalTitle" not in articles and "Source Title" in articles:
@@ -501,7 +520,7 @@ def advanced_thematic_analysis(data: pd.DataFrame, cooccurrence_threshold: float
     articles = articles.rename(columns={"Dominant_Topic": "Topic", "OriginalTitle": "Source", "Cited by": "Citations"})
     tables["all_articles_by_topic_and_citation"] = articles
     canonical = articles.drop_duplicates("Topic", keep="first").sort_values("Topic").copy()
-    canonical["First Author"] = canonical.get("Authors", pd.Series("N/A", index=canonical.index)).fillna("N/A").astype(str).str.split(";").str[0].str.strip()
+    canonical["First Author"] = canonical["Selected Author Names"].fillna("N/A").astype(str).str.split(";").str[0].str.strip()
     canonical["Title (Short)"] = canonical.get("Title", pd.Series("N/A", index=canonical.index)).astype(str).map(
         lambda title: title[:50] + "..." if len(title) > 50 else title
     )

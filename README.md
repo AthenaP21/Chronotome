@@ -1,8 +1,73 @@
 # Chronotome
 
-Chronotome is a Streamlit conversion of the original reproducible Jupyter/Kaggle bibliometric workflow. It accepts Scopus and Web of Science exports, harmonizes their schemas, fuses and deduplicates records, corrects for collection-year indexing lag, and produces the notebook's descriptive, citation, source, author, country, thematic, and institutional-network outputs.
+Chronotome is a bibliometric workflow for Scopus and Web of Science exports. It provides a local Streamlit application and a Python API for data preparation, descriptive bibliometrics, geographic analysis, thematic analysis, and institutional collaboration networks.
 
-## Run locally
+- PyPI: [pypi.org/project/chronotome](https://pypi.org/project/chronotome/)
+- Source code: [github.com/AthenaP21/Chronotome](https://github.com/AthenaP21/Chronotome)
+- Zenodo record: [doi.org/10.5281/zenodo.17514930](https://doi.org/10.5281/zenodo.17514930)
+
+## Install Chronotome
+
+Chronotome supports Python 3.11 and 3.12. Python 3.11 is used in the examples below.
+
+### 1. Verify Python 3.11
+
+On macOS or Linux:
+
+```bash
+python3.11 --version
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.11 --version
+```
+
+The result should begin with:
+
+```text
+Python 3.11
+```
+
+If the command is unavailable, install Python 3.11 from [python.org/downloads](https://www.python.org/downloads/), reopen the terminal, and run the version command again.
+
+### 2. Create a virtual environment
+
+A virtual environment keeps Chronotome and its dependencies separate from other Python installations.
+
+On macOS or Linux:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python --version
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+python --version
+```
+
+After activation, `python --version` should report Python 3.11.x.
+
+If PowerShell blocks activation, run the following command in the same terminal and activate the environment again:
+
+```powershell
+Set-ExecutionPolicy -Scope Process RemoteSigned
+```
+
+### 3. Verify and update pip
+
+```bash
+python -m pip --version
+python -m pip install --upgrade pip
+```
+
+### 4. Install Chronotome from PyPI
 
 Chronotome is installable as a local Python package. Python 3.11 is recommended.
 
@@ -25,7 +90,7 @@ streamlit run app.py --server.address 127.0.0.1
 
 No notebook interface or local data paths are required. All uploaded and generated files are handled in memory. See the in-app **Local installation** page and [SECURITY.md](SECURITY.md) for the installation and release-safety guidance.
 
-## App pages
+### Local installation
 
 - **Home** introduces Chronotome, its expected outputs, the Zenodo open-science release, the bundled institution aliases, and the suggested citation.
 - **Data ingestion** provides separate Scopus and WoS configuration, Single file and Appendage modes, upload verification, deterministic preprocessing, schema harmonization, deduplication, textual PRISMA reporting, and final CSV/Excel/ZIP downloads.
@@ -86,42 +151,81 @@ The Streamlit app preserves the notebook's current methods:
 The main entry point is:
 
 ```python
-from chronotome_core import run_chronotome
-
-results = run_chronotome(uploaded_files, config)
+from chronotome import run_chronotome
 ```
 
-`results` contains processed data, tables, figures, warnings, metadata, network objects, PRISMA counts, and in-memory export files.
+Signature:
 
-## Notebook assumptions retained
+```python
+def run_chronotome(
+    *,
+    scopus_files=None,
+    wos_files=None,
+    modes=None,
+    config=None,
+    ingestion_result=None,
+    progress_callback=None,
+) -> dict:
+    ...
+```
 
-- DOI duplicates retain the most-cited record as the base and fill its missing fields from duplicates.
-- Records without DOI are deduplicated by normalized title plus publication year.
-- Citation normalization uses the uploaded corpus's mean citations for each publication year; it is not an external field benchmark.
-- The collection year and later are excluded by default because those years may be incompletely indexed.
-- Country and institution extraction uses semicolon-separated affiliations and comma-separated address components.
-- Multi-country publications are MCP; one-country publications are SCP.
-- EU network subsets include publications whose detected countries are exclusively EU member states.
-- At most 50 institutions per paper are used to construct collaboration pairs by default.
-- “Hot papers” means papers from the current year and previous three years, ranked by raw citations.
-- Source and country impact rankings default to a minimum of five papers.
-- Thematic analysis combines title, abstract, author keywords, and Keywords Plus.
+Example:
 
-## Not yet supported
+```python
+from pathlib import Path
+from chronotome import run_chronotome
 
-- **OpenAlex integration is not implemented yet.**
-- No APIs are called to enrich incomplete metadata.
-- The app does not replace missing affiliations, abstracts, references, or citation counts.
+with Path("scopus_export.csv").open("rb") as scopus:
+    result = run_chronotome(
+        scopus_files=[scopus],
+        modes={"Scopus": "single", "WoS": "single"},
+        config={"collection_year": 2026},
+    )
 
-## Deploy on Streamlit Community Cloud
+processed_data = result["processed_data"]
+workflow_zip = result["exports"]["chronotome_complete_background_workflow.zip"]
+```
 
-1. Push this repository to GitHub, including `app.py`, `requirements.txt`, `chronotome_core/`, and `chronotome_core/institutions.json`.
-2. In [Streamlit Community Cloud](https://streamlit.io/cloud), create an app from the repository.
-3. Set the main file path to `app.py`.
-4. Deploy. No secrets or external API keys are needed.
+The result contains:
 
-Large exports and dense networks can approach Community Cloud memory/time limits. For those datasets, disable thematic analysis or reduce the number of institutions displayed in network plots.
+| Key | Contents |
+|---|---|
+| `processed_data` | Enriched article-level pandas DataFrame |
+| `stages` | Status and resource summaries for completed stages |
+| `manifest` | Workflow stage manifest |
+| `warnings` | Data-quality and availability warnings |
+| `exports` | Downloadable files stored as bytes |
+| `metadata` | Workflow and input metadata |
+| `config` | Resolved configuration values |
 
-Analytical figure downloads preserve the notebook styling and filenames. Standard figures are exported as 600-DPI PNG plus vector SVG and PDF; oversized network rasters are safely bounded while SVG/PDF remain resolution-independent. Tables are available as individual CSV files and combined Excel workbooks inside ZIP folders organized into `Plots/` and `Results/`.
+### Configuration keys
 
-For memory safety, oversized raster figures use an adaptive pixel ceiling while retaining their original aspect ratio and layout. Full-resolution SVG and PDF remain the publication masters. The one-click background workflow uses a stricter raster budget, streams outputs stage by stage, and keeps only its final archive and manifest in session memory.
+| Key | Default | Purpose |
+|---|---:|---|
+| `enable_time_filter` | `True` | Keep records before the collection year |
+| `collection_year` | `None` | Collection-year cutoff; `None` uses the current year |
+| `top_n` | `10` | Number of records in applicable rankings |
+| `min_source_papers` | `5` | Minimum papers in source-impact rankings |
+| `max_source_title_length` | `30` | Maximum source-title length used in source plots |
+| `country_min_papers` | `5` | Minimum papers in country-impact rankings |
+| `institutional_top_n_plot` | `30` | Institutions shown in an institutional network |
+| `max_institutions_per_paper` | `50` | Institution threshold for collaboration-edge construction |
+| `topic_k_values` | `3` through `10` | Topic counts evaluated for LDA and NMF |
+| `thematic_min_df` | `None` | Automatic n-gram document-frequency threshold |
+| `topic_model_min_df` | `2` | Topic-model document-frequency threshold |
+| `topic_bin_duration` | `5` | Years in each topic-evolution interval |
+| `run_topic_institutional` | `True` | Run topic-specific institutional analysis when topic results are available |
+| `community_top_n_global` | `50` | Institutions shown in global community figures |
+| `community_top_n_eu` | `30` | Institutions shown in EU community figures |
+
+Unknown configuration keys raise `ValueError`.
+
+## Citation
+
+```text
+Popescu-Apreutesei, L.-E., & Iosupescu, M.-S. (2025). Chronotome. Zenodo. https://doi.org/10.5281/zenodo.17514930
+```
+
+## Security
+
+The packaged launcher binds Streamlit to `127.0.0.1`. Uploaded bibliographic files and generated outputs are processed by the local Python process. See [SECURITY.md](SECURITY.md) for the project security policy.
