@@ -373,7 +373,7 @@ Unknown configuration keys raise `ValueError`.
 ## Citation
 
 ```text
-Popescu-Apreutesei, L.-E., & Iosupescu, M.-S. (2025). Chronotome. Zenodo. https://doi.org/10.5281/zenodo.17514930
+Popescu, L., & Iosupescu, M.-S. (2026). Chronotome: An open-source Python library for bibliometric analysis and network visualization (Version v1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.22646135
 ```
 
 ## Security
