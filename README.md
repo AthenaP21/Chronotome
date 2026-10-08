@@ -4,7 +4,7 @@ Chronotome is a bibliometric workflow for Scopus and Web of Science exports. It 
 
 - PyPI: [pypi.org/project/chronotome](https://pypi.org/project/chronotome/)
 - Source code: [github.com/AthenaP21/Chronotome](https://github.com/AthenaP21/Chronotome)
-- Zenodo record: [doi.org/10.5281/zenodo.17514930](https://doi.org/10.5281/zenodo.22646135)
+- Zenodo record: [doi.org/10.5281/zenodo.22646135](https://doi.org/10.5281/zenodo.22646135)
 
 ## Install Chronotome
 
