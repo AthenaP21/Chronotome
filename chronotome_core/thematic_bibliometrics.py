@@ -154,12 +154,13 @@ def _english_stopwords() -> set[str]:
 
 
 def _simple_lemma(word: str) -> str:
+    """Apply conservative plural reduction when POS resources are unavailable.
+
+    Keep -ing and -ed endings: without POS tags these may be substantive
+    terms such as learning, sequencing, or embedded, rather than verbs.
+    """
     if len(word) > 5 and word.endswith("ies"):
         return word[:-3] + "y"
-    if len(word) > 5 and word.endswith("ing"):
-        return word[:-3]
-    if len(word) > 4 and word.endswith("ed"):
-        return word[:-2]
     if len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
         return word[:-1]
     return word

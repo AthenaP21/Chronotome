@@ -220,6 +220,18 @@ class ChronotomeSmokeTest(unittest.TestCase):
         self.assertIn("artificial intelligence", bigrams)
         self.assertIn("machine learning", bigrams)
 
+    def test_missing_nltk_resources_preserve_substantive_terms(self):
+        from chronotome_core.thematic_bibliometrics import _preprocessor
+
+        with patch("nltk.tokenize.word_tokenize", side_effect=LookupError("missing punkt")):
+            process, method = _preprocessor({"and"})
+            self.test_empty_search_string_preserves_ai_and_ml_bigrams()
+        self.assertIn("fallback", method)
+        self.assertEqual(
+            process("Artificial intelligence and machine learning sequencing embedded"),
+            "artificial intelligence machine learning sequencing embedded",
+        )
+
     def test_staged_thematic_analysis_and_vector_exports(self):
         themes = [
             ("atmosphere spectrum telescope", "transit stellar orbit"),
