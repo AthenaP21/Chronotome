@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chronotome"
-version = "0.2.0"
+version = "1.0.0"
 description = "A reproducible local bibliometric workflow for Scopus and Web of Science exports."
 readme = "README.md"
 authors = [
